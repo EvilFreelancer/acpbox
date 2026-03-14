@@ -78,9 +78,11 @@ pytest tests/ -v
 
 Build an image that includes the gateway and your ACP server; set `acp.command` and `acp.env` in config or via `.env` so the gateway starts your server. Use `docker compose` with `.env` (see [docs/deployment.md](docs/deployment.md)).
 
-## Docs
+## Specifications
 
-- [Configuration](docs/config.md) – YAML and env, all fields, pydantic-settings.
-- [API mapping](docs/api-mapping.md) – Endpoint-by-endpoint request/response mapping, OpenAI vs ACP, chat_id/response_id, session delete.
-- [ACP lifecycle](docs/acp-lifecycle.md) – How the gateway starts ACP (command, env, ping, shutdown), requirements for the ACP server.
-- [Deployment](docs/deployment.md) – Docker image, custom ACP in container, env and compose.
+- [OpenAI API OpenAPI spec](https://github.com/openai/openai-openapi/tree/manual_spec) – OpenAI REST API specification (OpenAPI).
+- [Agent Communication Protocol (ACP)](https://github.com/i-am-bee/acp) – Open protocol for communication between AI agents, applications, and humans.
+
+## License
+
+This project is licensed under the MIT License, see the [LICENSE](LICENSE) file in the repository root for details.
