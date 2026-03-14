@@ -61,16 +61,18 @@ docker compose up --build gateway
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 
-## Testing
+## Tests
 
-From the repo root (with dev dependencies installed):
+Tests do not start an ACP process: the gateway calls a mock ACP over HTTP (`httpx.MockTransport`). Route tests live in `tests/test_models.py`, `tests/test_chat.py`, `tests/test_responses.py`, `tests/test_sessions.py`. Unit tests for mapping, errors, session_store, and config are in `tests/unit/`. Fixtures and the test app (no ACP lifespan) are in `tests/conftest.py`.
+
+Install test dependencies and run from the repo root:
 
 ```bash
-uv sync --all-extras
-uv run pytest tests/ -v
+pip install -r requirements-dev.txt
+pytest tests/ -v
 ```
 
-Or with pip: `pip install pytest pytest-asyncio`, then `pytest tests/ -v`. Tests use a mock ACP HTTP backend (no subprocess). See `tests/conftest.py` for fixtures and `tests/unit/` for unit tests (mapping, errors, session_store, config).
+`requirements-dev.txt` includes `requirements.txt` and adds pytest and pytest-asyncio.
 
 ## Adding your own ACP in Docker
 
