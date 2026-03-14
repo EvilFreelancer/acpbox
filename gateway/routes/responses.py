@@ -1,0 +1,115 @@
+"""OpenAI /v1/responses (stateful) and /v1/sessions (extension)."""
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+import httpx
+
+from gateway.errors import acp_code_to_http_status, openai_error_body
+from gateway.mapping import (
+    acp_run_output_to_response_body,
+    new_chat_id,
+    new_response_id,
+    openai_response_input_to_acp_input,
+)
+from gateway.schemas import (
+    CreateResponseBody,
+    CreateResponseRequest,
+    DeletedResponse,
+)
+from gateway.session_store import (
+    chat_id_or_new,
+    delete_response,
+    delete_session,
+    register_response,
+)
+
+router = APIRouter(tags=["Responses"])
+router_responses = APIRouter(prefix="/v1/responses", tags=["Responses"])
+router_sessions = APIRouter(prefix="/v1/sessions", tags=["Sessions"])
+
+
+def get_client(request: Request) -> httpx.AsyncClient:
+    return request.app.state.acp_client
+
+
+@router_responses.post("", response_model=CreateResponseBody)
+async def create_response(
+    body: CreateResponseRequest,
+    request: Request,
+    client: httpx.AsyncClient = Depends(get_client),
+) -> CreateResponseBody:
+    """POST /v1/responses. Stateful: use chat_id as ACP session_id."""
+    base_url = request.app.state.acp_base_url
+    chat_id = chat_id_or_new(body.chat_id)
+    if isinstance(body.input, str):
+        input_payload: str | list[dict] = body.input
+    else:
+        input_payload = [x.model_dump() for x in body.input]
+    acp_input = openai_response_input_to_acp_input(input_payload)
+    if not acp_input:
+        raise HTTPException(
+            status_code=400,
+            detail=openai_error_body("input cannot be empty", "invalid_input"),
+        )
+    payload = {
+        "agent_name": body.model,
+        "session_id": chat_id,
+        "input": acp_input,
+        "mode": "sync",
+    }
+    try:
+        r = await client.post(f"{base_url}/runs", json=payload)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=openai_error_body(str(e), "server_error"),
+        ) from e
+    if r.status_code not in (200, 202):
+        resp_body = r.json() if r.content else {}
+        code = resp_body.get("code", "server_error")
+        message = resp_body.get("message", r.text or "ACP error")
+        raise HTTPException(
+            status_code=acp_code_to_http_status(code),
+            detail=openai_error_body(message, code),
+        )
+    run = r.json()
+    response_id = new_response_id()
+    register_response(response_id, chat_id)
+    return acp_run_output_to_response_body(run, body.model, response_id, chat_id)
+
+
+@router_responses.get("/{response_id}")
+async def get_response(
+    response_id: str,
+    request: Request,
+    client: httpx.AsyncClient = Depends(get_client),
+) -> CreateResponseBody:
+    """GET /v1/responses/{response_id}. We do not store full response body; return 404 or minimal."""
+    raise HTTPException(
+        status_code=501,
+        detail=openai_error_body("GET /v1/responses/{id} not implemented (responses are not stored)", "server_error"),
+    )
+
+
+@router_responses.delete("/{response_id}", response_model=DeletedResponse)
+async def delete_response_endpoint(response_id: str) -> DeletedResponse:
+    """DELETE /v1/responses/{response_id}. Remove from session store."""
+    found = delete_response(response_id)
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail=openai_error_body("Response not found", "not_found"),
+        )
+    return DeletedResponse(id=response_id)
+
+
+@router_sessions.delete("/{chat_id}")
+async def delete_session_endpoint(chat_id: str) -> dict[str, str | bool]:
+    """DELETE /v1/sessions/{chat_id}. Extension: remove entire session (all response_ids)."""
+    found = delete_session(chat_id)
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail=openai_error_body("Session not found", "not_found"),
+        )
+    return {"id": chat_id, "object": "session", "deleted": True}
