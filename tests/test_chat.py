@@ -1,23 +1,21 @@
-"""Tests for POST /v1/chat/completions (stateless)."""
+"""Tests for POST /v1/chat/completions (stateless) via mocked ACP stdio."""
 
-import httpx
 import pytest
 
+from gateway.acp_stdio import AcpStdioError
 
-def test_chat_completion_ok(client, acp_responses):
-    """POST /v1/chat/completions maps to ACP POST /runs and returns OpenAI format."""
-    acp_responses[("POST", "/runs")] = httpx.Response(
-        200,
-        json={
-            "run_id": "run-123",
-            "output": [
-                {
-                    "role": "agent",
-                    "parts": [{"content_type": "text/plain", "content": "Hello back"}],
-                },
-            ],
-        },
-    )
+
+@pytest.fixture
+def mock_run_single_turn(monkeypatch):
+    """Mock run_single_turn to avoid spawning real ACP process."""
+    async def _mock(*args, **kwargs):
+        return ("Hello back", "end_turn")
+    monkeypatch.setattr("gateway.routes.chat.run_single_turn", _mock)
+    return _mock
+
+
+def test_chat_completion_ok(client, mock_run_single_turn):
+    """POST /v1/chat/completions returns OpenAI format from mocked ACP."""
     r = client.post(
         "/v1/chat/completions",
         json={
@@ -36,7 +34,7 @@ def test_chat_completion_ok(client, acp_responses):
     assert "usage" in data
 
 
-def test_chat_completion_stream_not_supported(client, acp_responses):
+def test_chat_completion_stream_not_supported(client, mock_run_single_turn):
     """POST /v1/chat/completions with stream=true returns 400."""
     r = client.post(
         "/v1/chat/completions",
@@ -50,7 +48,7 @@ def test_chat_completion_stream_not_supported(client, acp_responses):
     assert "stream" in r.json()["error"]["message"].lower() or "not yet supported" in r.json()["error"]["message"]
 
 
-def test_chat_completion_empty_messages(client, acp_responses):
+def test_chat_completion_empty_messages(client, mock_run_single_turn):
     """POST /v1/chat/completions with empty messages returns 400."""
     r = client.post(
         "/v1/chat/completions",
@@ -63,12 +61,11 @@ def test_chat_completion_empty_messages(client, acp_responses):
     assert r.json()["error"]["code"] == "invalid_input"
 
 
-def test_chat_completion_acp_error(client, acp_responses):
-    """POST /v1/chat/completions when ACP returns error maps to HTTP and OpenAI error body."""
-    acp_responses[("POST", "/runs")] = httpx.Response(
-        400,
-        json={"code": "invalid_input", "message": "Invalid input"},
-    )
+def test_chat_completion_acp_error(client, monkeypatch):
+    """POST /v1/chat/completions when ACP raises maps to 503 and OpenAI error body."""
+    async def _mock_err(*args, **kwargs):
+        raise AcpStdioError("Invalid input")
+    monkeypatch.setattr("gateway.routes.chat.run_single_turn", _mock_err)
     r = client.post(
         "/v1/chat/completions",
         json={
@@ -76,21 +73,15 @@ def test_chat_completion_acp_error(client, acp_responses):
             "messages": [{"role": "user", "content": "Hi"}],
         },
     )
-    assert r.status_code == 400
+    assert r.status_code == 503
     assert r.json()["error"]["message"] == "Invalid input"
 
 
-def test_chat_completion_multiple_text_parts(client, acp_responses):
-    """POST /v1/chat/completions concatenates multiple text/plain parts from ACP output."""
-    acp_responses[("POST", "/runs")] = httpx.Response(
-        200,
-        json={
-            "output": [
-                {"role": "agent", "parts": [{"content_type": "text/plain", "content": "Hello "}]},
-                {"role": "agent", "parts": [{"content_type": "text/plain", "content": "world"}]},
-            ],
-        },
-    )
+def test_chat_completion_multiple_text_parts(client, monkeypatch):
+    """POST /v1/chat/completions returns concatenated text from mock."""
+    async def _mock(*args, **kwargs):
+        return ("Hello world", "end_turn")
+    monkeypatch.setattr("gateway.routes.chat.run_single_turn", _mock)
     r = client.post(
         "/v1/chat/completions",
         json={

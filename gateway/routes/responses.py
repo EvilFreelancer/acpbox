@@ -1,15 +1,14 @@
-"""OpenAI /v1/responses (stateful) and /v1/sessions (extension)."""
+"""OpenAI /v1/responses (stateful) and /v1/sessions via ACP stdio (one agent per request)."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-import httpx
-
-from gateway.errors import acp_code_to_http_status, openai_error_body
+from gateway.acp_stdio import AcpStdioError, run_single_turn
+from gateway.errors import openai_error_body
 from gateway.mapping import (
-    acp_run_output_to_response_body,
+    acp_aggregated_text_to_response_body,
     new_chat_id,
     new_response_id,
-    openai_response_input_to_acp_input,
+    openai_response_input_to_acp_prompt_blocks,
 )
 from gateway.schemas import (
     CreateResponseBody,
@@ -28,66 +27,47 @@ router_responses = APIRouter(prefix="/v1/responses", tags=["Responses"])
 router_sessions = APIRouter(prefix="/v1/sessions", tags=["Sessions"])
 
 
-def get_client(request: Request) -> httpx.AsyncClient:
-    return request.app.state.acp_client
-
-
 @router_responses.post("", response_model=CreateResponseBody)
-async def create_response(
-    body: CreateResponseRequest,
-    request: Request,
-    client: httpx.AsyncClient = Depends(get_client),
-) -> CreateResponseBody:
-    """POST /v1/responses. Stateful: use chat_id as ACP session_id."""
-    base_url = request.app.state.acp_base_url
+async def create_response(body: CreateResponseRequest, request: Request) -> CreateResponseBody:
+    """POST /v1/responses: spawn ACP agent, session/prompt, return response. chat_id for client continuity."""
+    config = request.app.state.config
     chat_id = chat_id_or_new(body.chat_id)
     if isinstance(body.input, str):
-        input_payload: str | list[dict] = body.input
+        input_payload: str | list = body.input
     else:
         input_payload = [x.model_dump() for x in body.input]
-    acp_input = openai_response_input_to_acp_input(input_payload)
-    if not acp_input:
+    prompt_blocks = openai_response_input_to_acp_prompt_blocks(input_payload)
+    if not prompt_blocks:
         raise HTTPException(
             status_code=400,
             detail=openai_error_body("input cannot be empty", "invalid_input"),
         )
-    payload = {
-        "agent_name": body.model,
-        "session_id": chat_id,
-        "input": acp_input,
-        "mode": "sync",
-    }
     try:
-        r = await client.post(f"{base_url}/runs", json=payload)
-    except Exception as e:
+        text, _stop_reason = await run_single_turn(
+            command=config.acp.command,
+            env=config.acp.env,
+            cwd=config.acp.cwd,
+            prompt_blocks=prompt_blocks,
+        )
+    except AcpStdioError as e:
         raise HTTPException(
             status_code=503,
             detail=openai_error_body(str(e), "server_error"),
         ) from e
-    if r.status_code not in (200, 202):
-        resp_body = r.json() if r.content else {}
-        code = resp_body.get("code", "server_error")
-        message = resp_body.get("message", r.text or "ACP error")
-        raise HTTPException(
-            status_code=acp_code_to_http_status(code),
-            detail=openai_error_body(message, code),
-        )
-    run = r.json()
     response_id = new_response_id()
     register_response(response_id, chat_id)
-    return acp_run_output_to_response_body(run, body.model, response_id, chat_id)
+    return acp_aggregated_text_to_response_body(text, body.model, response_id, chat_id)
 
 
 @router_responses.get("/{response_id}")
-async def get_response(
-    response_id: str,
-    request: Request,
-    client: httpx.AsyncClient = Depends(get_client),
-) -> CreateResponseBody:
-    """GET /v1/responses/{response_id}. We do not store full response body; return 404 or minimal."""
+async def get_response(response_id: str) -> None:
+    """GET /v1/responses/{response_id} not implemented."""
     raise HTTPException(
         status_code=501,
-        detail=openai_error_body("GET /v1/responses/{id} not implemented (responses are not stored)", "server_error"),
+        detail=openai_error_body(
+            "GET /v1/responses/{id} not implemented (responses are not stored)",
+            "server_error",
+        ),
     )
 
 
@@ -105,7 +85,7 @@ async def delete_response_endpoint(response_id: str) -> DeletedResponse:
 
 @router_sessions.delete("/{chat_id}")
 async def delete_session_endpoint(chat_id: str) -> dict[str, str | bool]:
-    """DELETE /v1/sessions/{chat_id}. Extension: remove entire session (all response_ids)."""
+    """DELETE /v1/sessions/{chat_id}. Extension: remove entire session."""
     found = delete_session(chat_id)
     if not found:
         raise HTTPException(

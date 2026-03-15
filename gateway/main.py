@@ -1,14 +1,12 @@
-"""FastAPI app: load config, start ACP process, mount OpenAI-compatible routes."""
+"""FastAPI app: load config, mount OpenAI-compatible routes. ACP agents run per-request over stdio."""
 
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from gateway.acp_runner import AcpRunner, AcpRunnerError, run_stdout_logger
 from gateway.config import Config
 from gateway.routes import chat, models, responses
 
@@ -18,37 +16,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Start ACP process, wait for /ping, attach httpx client; on exit stop ACP and close client."""
-    config = app.state.config
-    runner = AcpRunner(
-        command=config.acp.command,
-        env=config.acp.env,
-        base_url=config.gateway.acp_base_url,
-        startup_timeout_seconds=config.acp.startup_timeout_seconds,
-    )
-    try:
-        await runner.start()
-    except AcpRunnerError as e:
-        logger.error("ACP failed to start: %s", e)
-        raise
-    app.state.acp_runner = runner
-    if runner._process:
-        app.state._acp_stdout_task = run_stdout_logger(runner._process)
-    else:
-        app.state._acp_stdout_task = None
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        app.state.acp_client = client
-        app.state.acp_base_url = config.gateway.acp_base_url
-        yield
-
-    if getattr(app.state, "_acp_stdout_task", None):
-        app.state._acp_stdout_task.cancel()
-        try:
-            await app.state._acp_stdout_task
-        except Exception:
-            pass
-    await runner.stop()
+    """No global ACP process; each request spawns its own agent over stdio."""
+    yield
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
@@ -56,7 +25,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
     config = Config.load(config_path)
     app = FastAPI(
         title="ACP OpenAI API Gateway",
-        description="OpenAI-compatible API that translates to an ACP server.",
+        description="OpenAI-compatible API that translates to Agent Client Protocol (ACP) over stdio.",
         lifespan=lifespan,
     )
     app.state.config = config

@@ -1,19 +1,21 @@
 """Tests for POST /v1/responses, DELETE /v1/responses/{id}, GET /v1/responses/{id}."""
 
-import httpx
 import pytest
 
+from gateway.acp_stdio import AcpStdioError
 
-def test_create_response_ok(client, acp_responses):
+
+@pytest.fixture
+def mock_run_single_turn(monkeypatch):
+    """Mock run_single_turn to avoid spawning real ACP process."""
+    async def _mock(*args, **kwargs):
+        return ("Reply", "end_turn")
+    monkeypatch.setattr("gateway.routes.responses.run_single_turn", _mock)
+    return _mock
+
+
+def test_create_response_ok(client, mock_run_single_turn):
     """POST /v1/responses with model and input returns response with id and chat_id."""
-    acp_responses[("POST", "/runs")] = httpx.Response(
-        200,
-        json={
-            "output": [
-                {"role": "agent", "parts": [{"content_type": "text/plain", "content": "Reply"}]},
-            ],
-        },
-    )
     r = client.post(
         "/v1/responses",
         json={
@@ -31,12 +33,8 @@ def test_create_response_ok(client, acp_responses):
     assert data["output"][0]["content"][0]["text"] == "Reply"
 
 
-def test_create_response_with_chat_id(client, acp_responses):
-    """POST /v1/responses with chat_id sends session_id to ACP and returns same chat_id."""
-    acp_responses[("POST", "/runs")] = httpx.Response(
-        200,
-        json={"output": [{"role": "agent", "parts": [{"content_type": "text/plain", "content": "Hi"}]}]},
-    )
+def test_create_response_with_chat_id(client, mock_run_single_turn):
+    """POST /v1/responses with chat_id returns same chat_id."""
     r = client.post(
         "/v1/responses",
         json={
@@ -49,7 +47,7 @@ def test_create_response_with_chat_id(client, acp_responses):
     assert r.json()["chat_id"] == "session-123"
 
 
-def test_create_response_empty_input(client, acp_responses):
+def test_create_response_empty_input(client, mock_run_single_turn):
     """POST /v1/responses with empty input returns 400."""
     r = client.post(
         "/v1/responses",
@@ -62,12 +60,8 @@ def test_create_response_empty_input(client, acp_responses):
     assert r.json()["error"]["code"] == "invalid_input"
 
 
-def test_delete_response_ok(client, acp_responses):
+def test_delete_response_ok(client, mock_run_single_turn):
     """DELETE /v1/responses/{id} after creating one returns 200 and deleted body."""
-    acp_responses[("POST", "/runs")] = httpx.Response(
-        200,
-        json={"output": [{"role": "agent", "parts": [{"content_type": "text/plain", "content": "x"}]}]},
-    )
     create_r = client.post("/v1/responses", json={"model": "m", "input": "hi"})
     assert create_r.status_code == 200
     response_id = create_r.json()["id"]

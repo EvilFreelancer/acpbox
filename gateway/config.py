@@ -32,16 +32,20 @@ def _parse_dict_from_env(v: dict[str, str] | str) -> dict[str, str]:
 
 
 class AcpConfig(BaseSettings):
-    """ACP server process and connection settings. All fields overridable via ACP_* env."""
+    """ACP agent process settings (stdio, one process per request). All fields overridable via ACP_* env."""
 
     model_config = SettingsConfigDict(env_prefix="ACP_", extra="ignore")
 
     command: list[str] = Field(
-        default_factory=lambda: ["python", "-m", "uvicorn", "acp_sdk.server.app:create_app", "--host", "127.0.0.1", "--port", "8000"],
-        description="Command to start the ACP server (list of strings). Env: ACP_COMMAND as JSON array.",
+        default_factory=lambda: ["opencode", "acp"],
+        description="Command to start the ACP agent (list of strings). Env: ACP_COMMAND as JSON array.",
     )
     env: dict[str, str] = Field(default_factory=dict, description="Extra env for ACP process. Env: ACP_ENV as JSON object.")
-    startup_timeout_seconds: int = Field(default=30, ge=1, le=300, description="Seconds to wait for /ping. Env: ACP_STARTUP_TIMEOUT_SECONDS.")
+    models: list[str] = Field(
+        default_factory=lambda: ["default"],
+        description="List of model ids for GET /v1/models (no agent spawn). Env: ACP_MODELS as JSON array.",
+    )
+    cwd: str | None = Field(default=None, description="Working directory for session/new. Env: ACP_CWD. If unset, current process cwd.")
 
     @field_validator("command", mode="before")
     @classmethod
@@ -53,6 +57,11 @@ class AcpConfig(BaseSettings):
     def env_from_env(cls, v: Any) -> dict[str, str]:
         return _parse_dict_from_env(v) if isinstance(v, (dict, str)) else v or {}
 
+    @field_validator("models", mode="before")
+    @classmethod
+    def models_from_env(cls, v: Any) -> list[str]:
+        return _parse_list_from_env(v) if isinstance(v, (list, str)) else (v if isinstance(v, list) else ["default"])
+
 
 class GatewayConfig(BaseSettings):
     """Gateway HTTP server settings. All fields overridable via GATEWAY_* env."""
@@ -61,12 +70,6 @@ class GatewayConfig(BaseSettings):
 
     host: str = Field(default="0.0.0.0", description="Host to bind. Env: GATEWAY_HOST.")
     port: int = Field(default=8080, ge=1, le=65535, description="Port for the gateway. Env: GATEWAY_PORT.")
-    acp_base_url: str = Field(default="http://127.0.0.1:8000", description="Base URL where ACP server listens. Env: GATEWAY_ACP_BASE_URL.")
-
-    @field_validator("acp_base_url")
-    @classmethod
-    def acp_base_url_no_trailing_slash(cls, v: str) -> str:
-        return v.rstrip("/")
 
 
 class Config(BaseSettings):

@@ -3,10 +3,14 @@
 import pytest
 
 from gateway.mapping import (
+    acp_aggregated_text_to_chat_completion,
+    acp_aggregated_text_to_response_body,
     acp_run_output_to_chat_completion,
     acp_run_output_to_response_body,
     openai_messages_to_acp_input,
+    openai_messages_to_acp_prompt_blocks,
     openai_response_input_to_acp_input,
+    openai_response_input_to_acp_prompt_blocks,
     new_chat_id,
     new_response_id,
 )
@@ -104,6 +108,51 @@ class TestAcpRunOutputToResponseBody:
         assert resp.object == "response"
         assert len(resp.output) == 1
         assert resp.output[0].content[0].text == "Reply"
+
+
+class TestOpenaiMessagesToAcpPromptBlocks:
+    def test_single_user(self):
+        out = openai_messages_to_acp_prompt_blocks([{"role": "user", "content": "Hi"}])
+        assert out == [{"type": "text", "text": "user: Hi"}]
+
+    def test_multiple_messages(self):
+        out = openai_messages_to_acp_prompt_blocks([
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": "Bye"},
+        ])
+        assert out == [{"type": "text", "text": "user: Hello\n\nassistant: Hi\n\nuser: Bye"}]
+
+    def test_empty_returns_empty(self):
+        assert openai_messages_to_acp_prompt_blocks([]) == []
+        assert openai_messages_to_acp_prompt_blocks([{"role": "user", "content": None}]) == []
+
+
+class TestOpenaiResponseInputToAcpPromptBlocks:
+    def test_string(self):
+        out = openai_response_input_to_acp_prompt_blocks("Hello")
+        assert out == [{"type": "text", "text": "Hello"}]
+
+    def test_list(self):
+        out = openai_response_input_to_acp_prompt_blocks([
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Bye"},
+        ])
+        assert out == [{"type": "text", "text": "user: Hi\n\nassistant: Bye"}]
+
+
+class TestAcpAggregatedTextToChatCompletion:
+    def test_basic(self):
+        resp = acp_aggregated_text_to_chat_completion("Hello", "my-model")
+        assert resp.choices[0].message.content == "Hello"
+        assert resp.model == "my-model"
+
+
+class TestAcpAggregatedTextToResponseBody:
+    def test_basic(self):
+        resp = acp_aggregated_text_to_response_body("Reply", "m", "resp_1", "chat_1")
+        assert resp.output[0].content[0].text == "Reply"
+        assert resp.chat_id == "chat_1"
 
 
 class TestNewIds:

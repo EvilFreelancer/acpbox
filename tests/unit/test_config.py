@@ -19,5 +19,5 @@ def test_config_load_defaults(monkeypatch):
     config = Config.load()
     assert config.gateway.port == 8080
     assert config.gateway.host == "0.0.0.0"
-    assert "acp" in config.acp.command or "uvicorn" in config.acp.command
-    assert config.acp.startup_timeout_seconds >= 1
+    assert config.acp.command
+    assert config.acp.models == ["default"]
