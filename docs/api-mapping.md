@@ -2,12 +2,14 @@
 
 How each OpenAI-compatible endpoint is implemented using ACP over stdio.
 
-## Models (OpenAI) <- config
+## Models (OpenAI) <- agent modes
+
+The list of "models" is the list of **agent operating modes** (ACP `session/new` response: `modes.availableModes[].id`). For example OpenCode reports `plan` and `build`. The gateway spawns the agent, calls `initialize` and `session/new`, and exposes these mode ids as OpenAI models.
 
 | OpenAI | Gateway | Notes |
 |--------|---------|--------|
-| `GET /v1/models` | Config `acp.models` | No agent spawn. Returns `data` = list of `{ id, object: "model", created, owned_by: "acp" }`. |
-| `GET /v1/models/{model}` | Config `acp.models` | If `model` is in the list, return one model object; else 404. |
+| `GET /v1/models` | Spawn agent -> `initialize` -> `session/new` | Returns `data` = list of `{ id: modeId, object: "model", created, owned_by: "acp" }`. 503 if agent fails. |
+| `GET /v1/models/{model}` | Same | If `model` is in the agent's availableModes (or fallback from agentInfo.name), return one model object; else 404. |
 
 ## Chat Completions (stateless)
 

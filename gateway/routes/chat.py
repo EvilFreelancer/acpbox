@@ -1,8 +1,8 @@
-"""OpenAI /v1/chat/completions via ACP stdio (one agent process per request)."""
+"""OpenAI /v1/chat/completions via per-worker ACP runner."""
 
 from fastapi import APIRouter, HTTPException, Request
 
-from gateway.acp_stdio import AcpStdioError, run_single_turn
+from gateway.acp_stdio import AcpStdioError
 from gateway.errors import openai_error_body
 from gateway.mapping import (
     acp_aggregated_text_to_chat_completion,
@@ -18,8 +18,7 @@ async def create_chat_completion(
     body: CreateChatCompletionRequest,
     request: Request,
 ) -> CreateChatCompletionResponse:
-    """POST /v1/chat/completions: spawn ACP agent, session/prompt, return chat completion."""
-    config = request.app.state.config
+    """POST /v1/chat/completions: use per-worker ACP runner, session/prompt, return chat completion."""
     if body.stream:
         raise HTTPException(
             status_code=400,
@@ -31,12 +30,11 @@ async def create_chat_completion(
             status_code=400,
             detail=openai_error_body("messages cannot be empty", "invalid_input"),
         )
+    runner = request.app.state.runner
     try:
-        text, stop_reason = await run_single_turn(
-            command=config.acp.command,
-            env=config.acp.env,
-            cwd=config.acp.cwd,
+        text, stop_reason = await runner.run_turn(
             prompt_blocks=prompt_blocks,
+            mode_id=body.model or None,
         )
     except AcpStdioError as e:
         raise HTTPException(

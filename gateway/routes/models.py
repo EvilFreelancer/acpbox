@@ -1,20 +1,30 @@
-"""OpenAI /v1/models from config (no ACP process)."""
+"""OpenAI /v1/models from ACP agent modes (session/new availableModes)."""
 
+import logging
 import time
 
 from fastapi import APIRouter, HTTPException, Request
 
+from gateway.acp_stdio import AcpStdioError
 from gateway.errors import openai_error_body
 from gateway.schemas import ListModelsResponse, ModelObject
 
 router = APIRouter(prefix="/v1/models", tags=["Models"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=ListModelsResponse)
 async def list_models(request: Request) -> ListModelsResponse:
-    """GET /v1/models returns list from config.acp.models (no agent spawn)."""
-    config = request.app.state.config
-    models_list = config.acp.models
+    """GET /v1/models returns agent modes (e.g. plan, build) from session/new availableModes."""
+    runner = request.app.state.runner
+    try:
+        models_list = await runner.get_agent_models()
+    except AcpStdioError as e:
+        logger.warning("Failed to get models from ACP agent: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=openai_error_body(str(e), "server_error"),
+        ) from e
     created = int(time.time())
     return ListModelsResponse(
         data=[
@@ -26,9 +36,16 @@ async def list_models(request: Request) -> ListModelsResponse:
 
 @router.get("/{model_id}", response_model=ModelObject)
 async def get_model(model_id: str, request: Request) -> ModelObject:
-    """GET /v1/models/{model_id} returns model if in config list."""
-    config = request.app.state.config
-    models_list = config.acp.models
+    """GET /v1/models/{model_id} returns model if in agent modes."""
+    runner = request.app.state.runner
+    try:
+        models_list = await runner.get_agent_models()
+    except AcpStdioError as e:
+        logger.warning("Failed to get models from ACP agent: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=openai_error_body(str(e), "server_error"),
+        ) from e
     if model_id not in models_list:
         raise HTTPException(
             status_code=404,

@@ -8,7 +8,6 @@ The gateway is configured via a YAML file and/or environment variables. Env over
 acp:
   command: ["opencode", "acp"]
   env: {}
-  models: ["default"]
   cwd: null
 gateway:
   host: "0.0.0.0"
@@ -21,10 +20,11 @@ gateway:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `command` | list of strings | `["opencode", "acp"]` | Command to start the ACP agent (subprocess argv). Runs once per chat/responses request; communication is over stdio. |
+| `command` | list of strings | `["opencode", "acp"]` | Command to start the ACP agent (subprocess argv). Used for every request (including `GET /v1/models`); communication is over stdio. |
 | `env` | map string -> string | `{}` | Extra environment variables for the ACP process. Merged over current env. |
-| `models` | list of strings | `["default"]` | Model ids returned by `GET /v1/models`. No agent is started for listing. |
 | `cwd` | string or null | null | Working directory for `session/new`. If null, the gateway process cwd is used. |
+
+**Models:** The list of "models" in `GET /v1/models` is **not** configured here. The gateway gets it from the agent: it spawns the agent, calls `initialize` and `session/new`, and uses `modes.availableModes[].id` (e.g. OpenCode returns `plan`, `build`) as the model list.
 
 ### `gateway`
 
@@ -40,7 +40,6 @@ gateway:
 | `CONFIG_PATH` | - | Path to YAML config. If unset, no file is loaded. |
 | `ACP_COMMAND` | acp | JSON array of strings, e.g. `["opencode", "acp"]`. |
 | `ACP_ENV` | acp | JSON object for extra env. |
-| `ACP_MODELS` | acp | JSON array of model ids, e.g. `["default"]`. |
 | `ACP_CWD` | acp | Working directory for session/new (optional). |
 | `GATEWAY_HOST` | gateway | Host to bind. |
 | `GATEWAY_PORT` | gateway | Port. |

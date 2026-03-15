@@ -1,54 +1,45 @@
-"""Tests for GET /v1/models and GET /v1/models/{model_id}."""
+"""Tests for GET /v1/models and GET /v1/models/{model_id} (from agent modes)."""
 
 import pytest
 
+from gateway.acp_stdio import AcpStdioError
 
-def test_list_models_empty(client):
-    """GET /v1/models when config has no models returns empty data list."""
-    client.app.state.config.acp.models = []
+
+def test_list_models_from_agent_modes(client):
+    """GET /v1/models returns agent availableModes (e.g. plan, build) as model list."""
     r = client.get("/v1/models")
     assert r.status_code == 200
     data = r.json()
     assert data["object"] == "list"
-    assert data["data"] == []
-
-
-def test_list_models_one_agent(client):
-    """GET /v1/models returns config models as OpenAI model list."""
-    client.app.state.config.acp.models = ["my-agent"]
-    r = client.get("/v1/models")
-    assert r.status_code == 200
-    data = r.json()
-    assert len(data["data"]) == 1
-    assert data["data"][0]["id"] == "my-agent"
+    assert len(data["data"]) == 2
+    ids = [m["id"] for m in data["data"]]
+    assert ids == ["plan", "build"]
     assert data["data"][0]["object"] == "model"
     assert data["data"][0]["owned_by"] == "acp"
-    assert "created" in data["data"][0]
 
 
-def test_list_models_multiple_agents(client):
-    """GET /v1/models returns all configured models."""
-    client.app.state.config.acp.models = ["a1", "a2"]
+def test_list_models_503_when_agent_fails(client, monkeypatch):
+    """GET /v1/models returns 503 when runner.get_agent_models raises."""
+    async def _mock_fail():
+        raise AcpStdioError("agent not found")
+    monkeypatch.setattr(client.app.state.runner, "get_agent_models", _mock_fail)
     r = client.get("/v1/models")
-    assert r.status_code == 200
-    ids = [m["id"] for m in r.json()["data"]]
-    assert ids == ["a1", "a2"]
+    assert r.status_code == 503
+    assert "error" in r.json()
 
 
 def test_get_model_ok(client):
-    """GET /v1/models/{model_id} returns model when in config."""
-    client.app.state.config.acp.models = ["my-agent"]
-    r = client.get("/v1/models/my-agent")
+    """GET /v1/models/{model_id} returns model when in agent modes."""
+    r = client.get("/v1/models/plan")
     assert r.status_code == 200
     data = r.json()
-    assert data["id"] == "my-agent"
+    assert data["id"] == "plan"
     assert data["object"] == "model"
     assert data["owned_by"] == "acp"
 
 
 def test_get_model_not_found(client):
-    """GET /v1/models/{model_id} returns 404 when not in config."""
-    client.app.state.config.acp.models = ["other"]
+    """GET /v1/models/{model_id} returns 404 when not in agent modes."""
     r = client.get("/v1/models/missing")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "not_found"

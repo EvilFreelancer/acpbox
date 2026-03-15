@@ -1,7 +1,9 @@
 """
-ACP client over stdio: spawn agent subprocess, send JSON-RPC via stdin, read from stdout.
+ACP client over stdio: one long-lived agent process per worker (uvicorn worker).
 
-One process per "session" or per request; no HTTP. See docs/agent-client-protocol/docs/protocol/transports.mdx.
+Each worker holds one AcpRunner that keeps a single ACP subprocess; all requests
+in that worker reuse it (session/new + session/prompt per request). With 8 workers
+you get 8 ACP binary instances. See docs/agent-client-protocol/docs/protocol/transports.mdx.
 """
 
 import asyncio
@@ -61,86 +63,155 @@ async def _request(
                     err.get("message", "Unknown error") or f"code={err.get('code')}"
                 )
             return msg.get("result") or {}
-        # Not our response (e.g. notification); caller should handle in read loop
         if "method" in msg:
             logger.debug("Unexpected notification while waiting for response: %s", msg.get("method"))
         continue
 
 
-async def run_single_turn(
-    command: list[str],
-    env: dict[str, str],
-    cwd: str | None,
-    prompt_blocks: list[dict[str, Any]],
-    *,
-    request_timeout: float = 300.0,
-) -> tuple[str, str]:
+class AcpRunner:
     """
-    Spawn ACP agent, perform initialize -> session/new -> session/prompt, collect agent text
-    from session/update (agent_message_chunk), return (aggregated_text, stop_reason).
+    One ACP agent process per worker. Started in lifespan, reused for all requests in this worker.
+    Use a lock so only one request at a time uses the process (stdio is single-stream).
     """
-    env_full = dict(os.environ) | env
-    work_dir = cwd or os.getcwd()
-    proc = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env_full,
-        cwd=work_dir,
-    )
-    assert proc.stdin and proc.stdout
-    stdin_writer: asyncio.StreamWriter = proc.stdin
-    stdout_reader: asyncio.StreamReader = proc.stdout
 
-    collected_text: list[str] = []
-    stop_reason = "end_turn"
-    next_id = 0
+    def __init__(
+        self,
+        command: list[str],
+        env: dict[str, str],
+        cwd: str | None,
+    ) -> None:
+        self._command = command
+        self._env = dict(os.environ) | env
+        self._cwd = cwd or os.getcwd()
+        self._proc: asyncio.subprocess.Process | None = None
+        self._stdin_writer: asyncio.StreamWriter | None = None
+        self._stdout_reader: asyncio.StreamReader | None = None
+        self._next_id = 0
+        self._initialized = False
+        self._lock = asyncio.Lock()
 
-    try:
-        # initialize
-        init_result = await _request(
-            stdin_writer,
-            stdout_reader,
-            next_id,
+    async def start(self) -> None:
+        """Spawn the ACP process and run initialize."""
+        if self._proc is not None:
+            return
+        logger.info("Starting ACP agent (one per worker): %s", self._command)
+        self._proc = await asyncio.create_subprocess_exec(
+            *self._command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._env,
+            cwd=self._cwd,
+        )
+        assert self._proc.stdin and self._proc.stdout
+        self._stdin_writer = self._proc.stdin
+        self._stdout_reader = self._proc.stdout
+        await self._do_initialize()
+
+    async def _do_initialize(self) -> None:
+        """Send initialize and set _initialized."""
+        if self._initialized or not self._stdin_writer or not self._stdout_reader:
+            return
+        await _request(
+            self._stdin_writer,
+            self._stdout_reader,
+            self._next_id,
             "initialize",
             {
                 "protocolVersion": 1,
                 "clientCapabilities": {},
                 "clientInfo": {"name": "acp-openapi-gateway", "version": "0.1.0"},
             },
-            timeout=request_timeout,
+            timeout=30.0,
         )
-        next_id += 1
-        logger.debug("initialize result: %s", init_result)
+        self._next_id += 1
+        self._initialized = True
+        logger.debug("ACP agent initialized")
 
-        # session/new
+    async def get_agent_models(self) -> list[str]:
+        """Return model ids from session/new modes.availableModes. Serialized with _lock."""
+        async with self._lock:
+            return await self._get_agent_models_unsafe()
+
+    async def _get_agent_models_unsafe(self) -> list[str]:
+        if not self._stdin_writer or not self._stdout_reader:
+            raise AcpStdioError("ACP process not started")
+        await self._do_initialize()
         new_result = await _request(
-            stdin_writer,
-            stdout_reader,
-            next_id,
+            self._stdin_writer,
+            self._stdout_reader,
+            self._next_id,
             "session/new",
-            {"cwd": work_dir, "mcpServers": []},
+            {"cwd": self._cwd, "mcpServers": []},
+            timeout=30.0,
+        )
+        self._next_id += 1
+        agent_name: str | None = None
+        modes = new_result.get("modes")
+        if isinstance(modes, dict):
+            available = modes.get("availableModes")
+            if isinstance(available, list) and len(available) > 0:
+                ids = []
+                for m in available:
+                    if isinstance(m, dict) and m.get("id"):
+                        ids.append(str(m["id"]))
+                if ids:
+                    return ids
+        return [agent_name or "default"]
+
+    async def run_turn(
+        self,
+        prompt_blocks: list[dict[str, Any]],
+        mode_id: str | None = None,
+        request_timeout: float = 300.0,
+    ) -> tuple[str, str]:
+        """Run one turn: session/new -> [session/set_mode] -> session/prompt. Serialized with _lock."""
+        async with self._lock:
+            return await self._run_turn_unsafe(prompt_blocks, mode_id, request_timeout)
+
+    async def _run_turn_unsafe(
+        self,
+        prompt_blocks: list[dict[str, Any]],
+        mode_id: str | None,
+        request_timeout: float,
+    ) -> tuple[str, str]:
+        if not self._stdin_writer or not self._stdout_reader:
+            raise AcpStdioError("ACP process not started")
+        await self._do_initialize()
+        new_result = await _request(
+            self._stdin_writer,
+            self._stdout_reader,
+            self._next_id,
+            "session/new",
+            {"cwd": self._cwd, "mcpServers": []},
             timeout=request_timeout,
         )
-        next_id += 1
+        self._next_id += 1
         session_id = new_result.get("sessionId")
         if not session_id:
             raise AcpStdioError("session/new did not return sessionId")
-
-        # session/prompt: we send the request then read until we get the response for this id
-        prompt_id = next_id
+        if mode_id:
+            await _request(
+                self._stdin_writer,
+                self._stdout_reader,
+                self._next_id,
+                "session/set_mode",
+                {"sessionId": session_id, "modeId": mode_id},
+                timeout=request_timeout,
+            )
+            self._next_id += 1
+        prompt_id = self._next_id
         req = {
             "jsonrpc": "2.0",
             "id": prompt_id,
             "method": "session/prompt",
             "params": {"sessionId": session_id, "prompt": prompt_blocks},
         }
-        await _write_message(stdin_writer, req)
-
-        # Read messages until we get session/prompt response (same id)
+        await _write_message(self._stdin_writer, req)
+        collected_text: list[str] = []
+        stop_reason = "end_turn"
         while True:
-            msg = await asyncio.wait_for(_read_message(stdout_reader), timeout=request_timeout)
+            msg = await asyncio.wait_for(_read_message(self._stdout_reader), timeout=request_timeout)
             if msg is None:
                 raise AcpStdioError("EOF before session/prompt response")
             if "id" in msg and msg["id"] == prompt_id:
@@ -159,22 +230,92 @@ async def run_single_turn(
                     content = update.get("content") or {}
                     if isinstance(content, dict) and content.get("type") == "text":
                         collected_text.append(content.get("text") or "")
-                # session/request_permission: auto-allow for gateway
                 continue
             if msg.get("method") == "session/request_permission":
-                # Reply with allow_once so agent can continue
                 perm_id = msg.get("id")
                 if perm_id is not None:
-                    reply = {
-                        "jsonrpc": "2.0",
-                        "id": perm_id,
-                        "result": {"outcome": "allow_once"},
-                    }
-                    await _write_message(stdin_writer, reply)
+                    reply = {"jsonrpc": "2.0", "id": perm_id, "result": {"outcome": "allow_once"}}
+                    await _write_message(self._stdin_writer, reply)
                 continue
             logger.debug("ACP message: %s", msg.get("method") or msg)
-
+        self._next_id += 1
         return ("".join(collected_text), stop_reason)
+
+    async def stop(self) -> None:
+        """Terminate the ACP process."""
+        if self._proc is None:
+            return
+        p = self._proc
+        self._proc = None
+        self._stdin_writer = None
+        self._stdout_reader = None
+        self._initialized = False
+        if p.returncode is not None:
+            return
+        logger.info("Stopping ACP agent (PID %s)", p.pid)
+        p.terminate()
+        try:
+            await asyncio.wait_for(p.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            p.kill()
+            await p.wait()
+
+
+# Standalone helpers for tests or one-off use (spawn per call)
+async def get_agent_models(
+    command: list[str],
+    env: dict[str, str],
+    cwd: str | None,
+    *,
+    timeout: float = 30.0,
+) -> list[str]:
+    """
+    Spawn ACP agent, call initialize and session/new, return list of model ids.
+    Used when no per-worker runner exists (e.g. tests with mock runner).
+    """
+    env_full = dict(os.environ) | env
+    work_dir = cwd or os.getcwd()
+    proc = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env_full,
+        cwd=work_dir,
+    )
+    assert proc.stdin and proc.stdout
+    try:
+        init_result = await _request(
+            proc.stdin,
+            proc.stdout,
+            0,
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientCapabilities": {},
+                "clientInfo": {"name": "acp-openapi-gateway", "version": "0.1.0"},
+            },
+            timeout=timeout,
+        )
+        agent_name: str | None = None
+        if isinstance(init_result.get("agentInfo"), dict):
+            agent_name = init_result["agentInfo"].get("name")
+        new_result = await _request(
+            proc.stdin,
+            proc.stdout,
+            1,
+            "session/new",
+            {"cwd": work_dir, "mcpServers": []},
+            timeout=timeout,
+        )
+        modes = new_result.get("modes")
+        if isinstance(modes, dict):
+            available = modes.get("availableModes")
+            if isinstance(available, list) and len(available) > 0:
+                ids = [str(m["id"]) for m in available if isinstance(m, dict) and m.get("id")]
+                if ids:
+                    return ids
+        return [agent_name or "default"]
     finally:
         if proc.returncode is None:
             proc.terminate()
@@ -183,10 +324,23 @@ async def run_single_turn(
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-        if proc.stderr:
-            try:
-                stderr = await proc.stderr.read()
-                if stderr:
-                    logger.debug("ACP stderr: %s", stderr.decode(errors="replace"))
-            except Exception:
-                pass
+
+
+async def run_single_turn(
+    command: list[str],
+    env: dict[str, str],
+    cwd: str | None,
+    prompt_blocks: list[dict[str, Any]],
+    *,
+    mode_id: str | None = None,
+    request_timeout: float = 300.0,
+) -> tuple[str, str]:
+    """
+    Spawn ACP agent, run one turn, then terminate. Used when no per-worker runner exists.
+    """
+    runner = AcpRunner(command, env, cwd)
+    await runner.start()
+    try:
+        return await runner.run_turn(prompt_blocks, mode_id, request_timeout)
+    finally:
+        await runner.stop()

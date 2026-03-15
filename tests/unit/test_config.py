@@ -20,4 +20,3 @@ def test_config_load_defaults(monkeypatch):
     assert config.gateway.port == 8080
     assert config.gateway.host == "0.0.0.0"
     assert config.acp.command
-    assert config.acp.models == ["default"]

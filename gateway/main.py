@@ -1,4 +1,4 @@
-"""FastAPI app: load config, mount OpenAI-compatible routes. ACP agents run per-request over stdio."""
+"""FastAPI app: one ACP process per uvicorn worker (lifespan), OpenAI-compatible routes."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gateway.acp_stdio import AcpRunner, AcpStdioError
 from gateway.config import Config
 from gateway.routes import chat, models, responses
 
@@ -16,8 +17,22 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """No global ACP process; each request spawns its own agent over stdio."""
+    """Start one ACP agent process per worker; stop on shutdown. With 8 workers you get 8 ACP instances."""
+    config = app.state.config
+    runner = AcpRunner(
+        command=config.acp.command,
+        env=config.acp.env,
+        cwd=config.acp.cwd,
+    )
+    try:
+        await runner.start()
+    except AcpStdioError as e:
+        logger.error("ACP agent failed to start: %s", e)
+        raise
+    app.state.runner = runner
     yield
+    await runner.stop()
+    app.state.runner = None
 
 
 def create_app(config_path: str | None = None) -> FastAPI:

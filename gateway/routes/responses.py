@@ -1,12 +1,11 @@
-"""OpenAI /v1/responses (stateful) and /v1/sessions via ACP stdio (one agent per request)."""
+"""OpenAI /v1/responses (stateful) and /v1/sessions via per-worker ACP runner."""
 
 from fastapi import APIRouter, HTTPException, Request
 
-from gateway.acp_stdio import AcpStdioError, run_single_turn
+from gateway.acp_stdio import AcpStdioError
 from gateway.errors import openai_error_body
 from gateway.mapping import (
     acp_aggregated_text_to_response_body,
-    new_chat_id,
     new_response_id,
     openai_response_input_to_acp_prompt_blocks,
 )
@@ -29,8 +28,7 @@ router_sessions = APIRouter(prefix="/v1/sessions", tags=["Sessions"])
 
 @router_responses.post("", response_model=CreateResponseBody)
 async def create_response(body: CreateResponseRequest, request: Request) -> CreateResponseBody:
-    """POST /v1/responses: spawn ACP agent, session/prompt, return response. chat_id for client continuity."""
-    config = request.app.state.config
+    """POST /v1/responses: use per-worker ACP runner, session/prompt, return response."""
     chat_id = chat_id_or_new(body.chat_id)
     if isinstance(body.input, str):
         input_payload: str | list = body.input
@@ -42,12 +40,11 @@ async def create_response(body: CreateResponseRequest, request: Request) -> Crea
             status_code=400,
             detail=openai_error_body("input cannot be empty", "invalid_input"),
         )
+    runner = request.app.state.runner
     try:
-        text, _stop_reason = await run_single_turn(
-            command=config.acp.command,
-            env=config.acp.env,
-            cwd=config.acp.cwd,
+        text, _stop_reason = await runner.run_turn(
             prompt_blocks=prompt_blocks,
+            mode_id=body.model or None,
         )
     except AcpStdioError as e:
         raise HTTPException(

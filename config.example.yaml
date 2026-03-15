@@ -7,8 +7,6 @@ acp:
     - opencode
     - acp
   env: {}
-  models:
-    - default
   cwd: null
 
 gateway:

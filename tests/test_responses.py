@@ -5,16 +5,7 @@ import pytest
 from gateway.acp_stdio import AcpStdioError
 
 
-@pytest.fixture
-def mock_run_single_turn(monkeypatch):
-    """Mock run_single_turn to avoid spawning real ACP process."""
-    async def _mock(*args, **kwargs):
-        return ("Reply", "end_turn")
-    monkeypatch.setattr("gateway.routes.responses.run_single_turn", _mock)
-    return _mock
-
-
-def test_create_response_ok(client, mock_run_single_turn):
+def test_create_response_ok(client):
     """POST /v1/responses with model and input returns response with id and chat_id."""
     r = client.post(
         "/v1/responses",
@@ -33,7 +24,7 @@ def test_create_response_ok(client, mock_run_single_turn):
     assert data["output"][0]["content"][0]["text"] == "Reply"
 
 
-def test_create_response_with_chat_id(client, mock_run_single_turn):
+def test_create_response_with_chat_id(client):
     """POST /v1/responses with chat_id returns same chat_id."""
     r = client.post(
         "/v1/responses",
@@ -47,7 +38,7 @@ def test_create_response_with_chat_id(client, mock_run_single_turn):
     assert r.json()["chat_id"] == "session-123"
 
 
-def test_create_response_empty_input(client, mock_run_single_turn):
+def test_create_response_empty_input(client):
     """POST /v1/responses with empty input returns 400."""
     r = client.post(
         "/v1/responses",
@@ -60,7 +51,7 @@ def test_create_response_empty_input(client, mock_run_single_turn):
     assert r.json()["error"]["code"] == "invalid_input"
 
 
-def test_delete_response_ok(client, mock_run_single_turn):
+def test_delete_response_ok(client):
     """DELETE /v1/responses/{id} after creating one returns 200 and deleted body."""
     create_r = client.post("/v1/responses", json={"model": "m", "input": "hi"})
     assert create_r.status_code == 200

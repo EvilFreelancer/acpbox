@@ -41,10 +41,6 @@ class AcpConfig(BaseSettings):
         description="Command to start the ACP agent (list of strings). Env: ACP_COMMAND as JSON array.",
     )
     env: dict[str, str] = Field(default_factory=dict, description="Extra env for ACP process. Env: ACP_ENV as JSON object.")
-    models: list[str] = Field(
-        default_factory=lambda: ["default"],
-        description="List of model ids for GET /v1/models (no agent spawn). Env: ACP_MODELS as JSON array.",
-    )
     cwd: str | None = Field(default=None, description="Working directory for session/new. Env: ACP_CWD. If unset, current process cwd.")
 
     @field_validator("command", mode="before")
@@ -56,11 +52,6 @@ class AcpConfig(BaseSettings):
     @classmethod
     def env_from_env(cls, v: Any) -> dict[str, str]:
         return _parse_dict_from_env(v) if isinstance(v, (dict, str)) else v or {}
-
-    @field_validator("models", mode="before")
-    @classmethod
-    def models_from_env(cls, v: Any) -> list[str]:
-        return _parse_list_from_env(v) if isinstance(v, (list, str)) else (v if isinstance(v, list) else ["default"])
 
 
 class GatewayConfig(BaseSettings):

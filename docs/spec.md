@@ -14,18 +14,18 @@ ACP is a standard for communication between AI agents and clients. Key facts:
 
 ## Gateway Architecture
 
-- **One agent process per request**: Each HTTP request that needs an agent (e.g. `POST /v1/chat/completions`, `POST /v1/responses`) spawns a new ACP agent subprocess, performs the full ACP handshake (initialize, session/new, session/prompt), collects the reply from `session/update` and the `session/prompt` response, then terminates the process. This matches the stdio model (one process, one connection) and works with any ACP agent (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`).
-- **Models list**: `GET /v1/models` does not spawn an agent. The list of "models" is taken from configuration (`acp.models`) or, if empty, a single default name derived from the agent command. This avoids starting an agent only to list capabilities.
-- **No global ACP process**: The gateway does not start a long-lived ACP server or poll `/ping`. All interaction is per-request over stdio.
+- **One ACP process per uvicorn worker**: The API runs under **uvicorn**. In FastAPI lifespan each worker starts **one** ACP agent subprocess and keeps it for the worker's lifetime. With 8 workers you get 8 ACP binary instances. All requests in that worker reuse the same process (session/new + session/prompt per request; the process is not terminated after each request). ACP uses stdio only (JSON-RPC); no HTTP to the agent.
+- **Models list**: `GET /v1/models` uses the worker's ACP process: `initialize` (once per process) and `session/new`, reads **agent modes** from the response: `modes.availableModes[].id` (e.g. OpenCode returns `plan`, `build`). These mode ids are exposed as OpenAI "models". If the agent does not report modes, the gateway uses `agentInfo.name` from `initialize` or `"default"`. On agent failure, the gateway returns 503.
+- **Dependencies**: The app is served with **uvicorn** (in `requirements.txt`). For production, run with `uvicorn ... --workers N` to get N ACP instances.
 
 ## API Mapping (summary)
 
 | OpenAI endpoint | Gateway behavior |
 |-----------------|------------------|
-| `GET /v1/models` | Return list from config `acp.models` (or default one). |
-| `GET /v1/models/{id}` | Return model if id is in configured list; else 404. |
-| `POST /v1/chat/completions` | Spawn agent -> initialize -> session/new -> session/prompt (messages as ACP prompt) -> aggregate agent text from session/update -> return OpenAI chat completion. |
-| `POST /v1/responses` | Same as above; optional `chat_id` is stored and returned for client continuity but each request still uses a new agent process (no in-agent session persistence across requests). |
+| `GET /v1/models` | Use worker's ACP process: initialize (if needed), session/new -> `modes.availableModes`; return those ids as models. 503 if agent fails. |
+| `GET /v1/models/{id}` | Same; return one model if id is in the agent's mode list; else 404. |
+| `POST /v1/chat/completions` | Use worker's ACP process: session/new -> optional session/set_mode -> session/prompt -> aggregate agent text from session/update -> return OpenAI chat completion. |
+| `POST /v1/responses` | Same as above; optional `chat_id` for client continuity (each request still uses a new session on the same process). |
 | `DELETE /v1/responses/{id}`, `DELETE /v1/sessions/{id}` | Gateway-only session store; no ACP call. |
 
 ## Conventions

@@ -1,4 +1,4 @@
-"""Pytest fixtures for gateway tests. ACP is mocked via run_single_turn (stdio)."""
+"""Pytest fixtures for gateway tests. ACP is mocked via app.state.runner (per-worker runner)."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -15,11 +15,27 @@ from gateway.routes import chat, models, responses
 logging.getLogger("gateway").setLevel(logging.WARNING)
 
 
+class MockRunner:
+    """Mock per-worker ACP runner for tests (no real process)."""
+
+    async def get_agent_models(self) -> list[str]:
+        return ["plan", "build"]
+
+    async def run_turn(
+        self,
+        prompt_blocks: list[Any],
+        mode_id: str | None = None,
+        request_timeout: float = 300.0,
+    ) -> tuple[str, str]:
+        return ("Reply", "end_turn")
+
+
 @pytest.fixture
 def app() -> FastAPI:
-    """Create FastAPI app with test lifespan (no ACP process)."""
+    """Create FastAPI app with test lifespan and mock runner (no real ACP process)."""
     @asynccontextmanager
     async def test_lifespan(app_instance: FastAPI) -> AsyncGenerator[None, None]:
+        app_instance.state.runner = MockRunner()
         yield
 
     config = Config.load()

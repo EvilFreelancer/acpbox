@@ -3,15 +3,7 @@
 import pytest
 
 
-@pytest.fixture
-def mock_run_single_turn(monkeypatch):
-    async def _mock(*args, **kwargs):
-        return ("x", "end_turn")
-    monkeypatch.setattr("gateway.routes.responses.run_single_turn", _mock)
-    return _mock
-
-
-def test_delete_session_ok(client, mock_run_single_turn):
+def test_delete_session_ok(client):
     """DELETE /v1/sessions/{chat_id} after creating responses in that session returns 200."""
     create_r = client.post(
         "/v1/responses",

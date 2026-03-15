@@ -1,20 +1,20 @@
 # ACP OpenAI API Gateway
 
-OpenAI-compatible HTTP API that acts as a **gateway to the Agent Client Protocol (ACP)**. Clients use the usual OpenAI endpoints (`/v1/models`, `/v1/chat/completions`, `/v1/responses`); the gateway spawns ACP-compatible agents as subprocesses and talks to them over **stdio** (JSON-RPC), not HTTP.
+OpenAI-compatible HTTP API that acts as a **gateway to the Agent Client Protocol (ACP)**. Clients use the usual OpenAI endpoints (`/v1/models`, `/v1/chat/completions`, `/v1/responses`); the gateway runs the API with **uvicorn** and keeps **one ACP agent process per worker** over **stdio** (JSON-RPC), not HTTP.
 
 ## Problem
 
-Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`) speak the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout. This gateway provides a single HTTP entry point: one base URL, OpenAI-shaped API, with an ACP agent run per request over stdio.
+Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`) speak the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout. This gateway provides a single HTTP entry point: one base URL, OpenAI-shaped API, with one ACP binary instance per uvicorn worker.
 
 ## How it works
 
-1. **Config** – YAML and env define the agent command, env vars, optional list of model names, and working directory for sessions.
-2. **No global ACP process** – The gateway does not start a long-lived ACP server or use HTTP to talk to the agent. ACP uses **stdio** only (JSON-RPC, newline-delimited).
-3. **Per-request agent** – For each chat/responses request the gateway spawns one agent subprocess, performs ACP handshake (`initialize` -> `session/new` -> `session/prompt`), collects output from `session/update` notifications and the `session/prompt` response, then terminates the process.
+1. **Config** – YAML and env define the agent command, env vars, and working directory for sessions.
+2. **One ACP process per worker** – The app runs under **uvicorn**. In lifespan each worker starts **one** ACP agent subprocess and keeps it for the worker's lifetime. With 8 workers you get 8 ACP binary instances. ACP uses **stdio** only (JSON-RPC, newline-delimited).
+3. **Reuse per request** – Each request in that worker uses the same process: `session/new` -> optional `session/set_mode` -> `session/prompt`, then the response is returned. The process is not terminated after each request.
 4. **Translation** – OpenAI requests are converted to ACP JSON-RPC; ACP content (e.g. `session/update` agent_message_chunk) is converted back to OpenAI chat/responses format.
-   - `GET /v1/models` – Returns list from config (no agent spawn).
-   - `POST /v1/chat/completions` – One agent process, one turn, reply as chat completion.
-   - `POST /v1/responses` – Same; optional `chat_id` for client-side continuity (each request still uses a new process).
+   - `GET /v1/models` – Uses the worker's ACP process: `initialize` (once) and `session/new`, returns **modes** (`modes.availableModes[].id`, e.g. OpenCode's `plan`, `build`) as the list of models.
+   - `POST /v1/chat/completions` – Uses the worker's ACP process; `model` selects the ACP mode. Reply as chat completion.
+   - `POST /v1/responses` – Same; optional `chat_id` for client-side continuity.
 
 See [docs/spec.md](docs/spec.md) and [docs/agent-client-protocol/docs/protocol/transports.mdx](docs/agent-client-protocol/docs/protocol/transports.mdx) for details.
 
@@ -24,19 +24,15 @@ sequenceDiagram
     participant Gateway
     participant AgentProcess
 
+    Note over Gateway,AgentProcess: One ACP process per uvicorn worker (started in lifespan)
     Client->>Gateway: GET /v1/models
-    Gateway-->>Client: list from config
+    Gateway->>AgentProcess: initialize, session/new (reuse process)
+    AgentProcess-->>Gateway: modes (e.g. plan, build)
+    Gateway-->>Client: list of models
 
     Client->>Gateway: POST /v1/chat/completions
-    Gateway->>AgentProcess: spawn, stdin/stdout
-    Gateway->>AgentProcess: initialize (JSON-RPC)
-    AgentProcess-->>Gateway: initialize result
-    Gateway->>AgentProcess: session/new (JSON-RPC)
-    AgentProcess-->>Gateway: sessionId
-    Gateway->>AgentProcess: session/prompt (JSON-RPC)
-    AgentProcess-->>Gateway: session/update (notifications)
-    AgentProcess-->>Gateway: session/prompt result
-    Gateway->>AgentProcess: terminate
+    Gateway->>AgentProcess: session/new, session/prompt (same process)
+    AgentProcess-->>Gateway: session/update, session/prompt result
     Gateway-->>Client: chat completion
 ```
 
@@ -46,19 +42,16 @@ sequenceDiagram
 
 2. **Env** – Copy `.env.example` to `.env` and set values. All options (`CONFIG_PATH`, `ACP_*`, `GATEWAY_*`) can be configured via env.
 
-3. **Run** – From the repo root:
+3. **Run** – From the repo root. The app uses **uvicorn** (listed in `requirements.txt`). Default is a single worker (one ACP instance). For production, run uvicorn with `--workers N` to get N ACP agent processes (one per worker):
 
 ```bash
 pip install -r requirements.txt
 CONFIG_PATH=config.yaml python -m gateway.main
+# Or explicitly with more workers (e.g. 8 workers = 8 ACP binary instances):
+# uvicorn gateway.main:create_app --factory --host 0.0.0.0 --port 8080 --workers 8
 ```
 
-Or with Docker Compose (reads `.env` and runs the `gateway` service):
-
-```bash
-cp .env.example .env
-docker compose up --build gateway
-```
+Or with Docker Compose (reads `.env` and runs the `gateway` service). The Dockerfile runs the app via `python -m gateway.main`, which starts uvicorn with one worker by default; override the command to use more workers if needed.
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 
@@ -75,7 +68,7 @@ pytest tests/ -v
 
 ## Adding your own ACP in Docker
 
-Build an image that includes the gateway and your ACP agent binary (e.g. `opencode acp`). Set `acp.command` and `acp.env` in config or `.env`. The gateway will spawn this command per request and talk over stdio. See [docs/deployment.md](docs/deployment.md).
+Build an image that includes the gateway and your ACP agent binary (e.g. `opencode acp`). Set `acp.command` and `acp.env` in config or `.env`. The server runs with **uvicorn**; each worker starts one ACP process in lifespan. To run 8 ACP instances, use `uvicorn ... --workers 8`. See [docs/deployment.md](docs/deployment.md).
 
 ## Specifications
 
