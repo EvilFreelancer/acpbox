@@ -6,7 +6,7 @@ How the gateway talks to the ACP agent over stdio (no HTTP). **One ACP process p
 
 The API runs under **uvicorn**. Each worker process has its own FastAPI app and its own lifespan. In lifespan the gateway starts **one** ACP agent subprocess (`asyncio.create_subprocess_exec(*acp.command, ...)`) and stores it in `app.state.runner`. With 8 workers you get 8 ACP binary instances. The process is not terminated after each request; it is reused for the next request in the same worker. On worker shutdown, the gateway calls `runner.stop()` to terminate the ACP process.
 
-ACP uses **stdio** only: the agent is launched as a subprocess and communication is JSON-RPC over stdin/stdout (newline-delimited). See [Agent Client Protocol - Transports](agent-client-protocol/docs/protocol/transports.mdx).
+ACP uses **stdio** only: the agent is launched as a subprocess and communication is JSON-RPC over stdin/stdout (newline-delimited). The gateway relies on the `agent-client-protocol` Python SDK for ACP schema models and helpers when constructing `session/prompt` content blocks, while the stdio transport remains a simple JSON-RPC loop in the gateway.
 
 ## Per-request flow (same process)
 

@@ -4,6 +4,9 @@ import time
 import uuid
 from typing import Any
 
+from acp import text_block
+from acp.schema import TextContentBlock
+
 from gateway.schemas import (
     ChatCompletionChoice,
     ChatCompletionChoiceMessage,
@@ -16,10 +19,33 @@ from gateway.schemas import (
 )
 
 
-def openai_messages_to_acp_prompt_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _apply_metadata_model_prefix(text: str, metadata: dict[str, Any] | None) -> str:
     """
-    Convert OpenAI chat messages to ACP session/prompt content blocks (ContentBlock[]).
-    Concatenates conversation into a single text block for the agent.
+    Apply metadata model prefix for opencode.
+
+    If metadata contains key "model" (for example from OpenAI metadata field),
+    prepend a line "model: <value>" before the main prompt text so the ACP
+    agent (opencode) can choose underlying LLM model.
+    """
+    if not metadata:
+        return text
+    model_value = metadata.get("model")
+    if not model_value:
+        return text
+    prefix = f"model: {model_value}"
+    if not text:
+        return prefix
+    return f"{prefix}\n\n{text}"
+
+
+def openai_messages_to_acp_prompt_blocks(
+    messages: list[dict[str, Any]],
+    metadata: dict[str, Any] | None = None,
+) -> list[TextContentBlock]:
+    """
+    Convert OpenAI chat messages to ACP session/prompt ContentBlock list.
+    Conversation is concatenated into a single text block for the agent.
+    If metadata.model is provided, it is prefixed in the first line for opencode.
     """
     parts: list[str] = []
     for m in messages:
@@ -35,16 +61,22 @@ def openai_messages_to_acp_prompt_blocks(messages: list[dict[str, Any]]) -> list
                     parts.append(f"{role}: {part['text']}")
     if not parts:
         return []
-    return [{"type": "text", "text": "\n\n".join(parts)}]
+    text = "\n\n".join(parts)
+    text = _apply_metadata_model_prefix(text, metadata)
+    block = text_block(text)
+    # text_block returns a TextContentBlock instance from acp.schema
+    return [block]
 
 
 def openai_response_input_to_acp_prompt_blocks(
     input_value: str | list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Convert OpenAI Responses API input to ACP session/prompt content blocks."""
+    metadata: dict[str, Any] | None = None,
+) -> list[TextContentBlock]:
+    """Convert OpenAI Responses API input to ACP session/prompt ContentBlock list."""
     if isinstance(input_value, str):
-        return [{"type": "text", "text": input_value}]
-    parts = []
+        text = _apply_metadata_model_prefix(input_value, metadata)
+        return [text_block(text)]
+    parts: list[str] = []
     for item in input_value:
         if not isinstance(item, dict):
             continue
@@ -60,7 +92,10 @@ def openai_response_input_to_acp_prompt_blocks(
                     parts.append(f"{role}: {part['text']}")
     if not parts:
         return []
-    return [{"type": "text", "text": "\n\n".join(parts)}]
+    text = "\n\n".join(parts)
+    text = _apply_metadata_model_prefix(text, metadata)
+    block = text_block(text)
+    return [block]
 
 
 def openai_messages_to_acp_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

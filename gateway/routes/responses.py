@@ -34,7 +34,10 @@ async def create_response(body: CreateResponseRequest, request: Request) -> Crea
         input_payload: str | list = body.input
     else:
         input_payload = [x.model_dump() for x in body.input]
-    prompt_blocks = openai_response_input_to_acp_prompt_blocks(input_payload)
+    prompt_blocks = openai_response_input_to_acp_prompt_blocks(
+        input_payload,
+        metadata=body.metadata,
+    )
     if not prompt_blocks:
         raise HTTPException(
             status_code=400,

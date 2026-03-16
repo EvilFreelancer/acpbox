@@ -26,6 +26,7 @@ class CreateChatCompletionRequest(BaseModel):
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ChatCompletionChoiceMessage(BaseModel):
@@ -67,6 +68,7 @@ class CreateResponseRequest(BaseModel):
     input: str | list[ResponseInputItem]
     instructions: str | None = None
     chat_id: str | None = None  # Extension: session id for stateful continuity
+    metadata: dict[str, Any] | None = None
 
 
 class ResponseOutputMessageContent(BaseModel):

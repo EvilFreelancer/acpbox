@@ -24,7 +24,10 @@ async def create_chat_completion(
             status_code=400,
             detail=openai_error_body("stream=true is not yet supported", "invalid_input"),
         )
-    prompt_blocks = openai_messages_to_acp_prompt_blocks([m.model_dump() for m in body.messages])
+    prompt_blocks = openai_messages_to_acp_prompt_blocks(
+        [m.model_dump() for m in body.messages],
+        metadata=body.metadata,
+    )
     if not prompt_blocks:
         raise HTTPException(
             status_code=400,

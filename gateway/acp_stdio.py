@@ -10,7 +10,9 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Sequence
+
+from acp.schema import TextContentBlock
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,17 @@ async def _read_message(stream: asyncio.StreamReader) -> dict[str, Any] | None:
     if not line:
         return None
     return json.loads(line.decode("utf-8").strip())
+
+
+def _serialize_prompt_blocks(blocks: Sequence[TextContentBlock | dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize ContentBlock models or plain dicts to JSON-serializable dicts."""
+    serialized: list[dict[str, Any]] = []
+    for b in blocks:
+        if isinstance(b, TextContentBlock):
+            serialized.append(b.model_dump(mode="json"))
+        else:
+            serialized.append(b)
+    return serialized
 
 
 async def _request(
@@ -161,7 +174,7 @@ class AcpRunner:
 
     async def run_turn(
         self,
-        prompt_blocks: list[dict[str, Any]],
+        prompt_blocks: Sequence[TextContentBlock | dict[str, Any]],
         mode_id: str | None = None,
         request_timeout: float = 300.0,
     ) -> tuple[str, str]:
@@ -171,13 +184,14 @@ class AcpRunner:
 
     async def _run_turn_unsafe(
         self,
-        prompt_blocks: list[dict[str, Any]],
+        prompt_blocks: Sequence[TextContentBlock | dict[str, Any]],
         mode_id: str | None,
         request_timeout: float,
     ) -> tuple[str, str]:
         if not self._stdin_writer or not self._stdout_reader:
             raise AcpStdioError("ACP process not started")
         await self._do_initialize()
+        prompt_payload = _serialize_prompt_blocks(prompt_blocks)
         new_result = await _request(
             self._stdin_writer,
             self._stdout_reader,
@@ -205,7 +219,7 @@ class AcpRunner:
             "jsonrpc": "2.0",
             "id": prompt_id,
             "method": "session/prompt",
-            "params": {"sessionId": session_id, "prompt": prompt_blocks},
+            "params": {"sessionId": session_id, "prompt": prompt_payload},
         }
         await _write_message(self._stdin_writer, req)
         collected_text: list[str] = []

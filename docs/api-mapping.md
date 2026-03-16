@@ -19,7 +19,8 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 **Request mapping (messages -> ACP prompt):**
 
-- Messages are converted to one or more ACP ContentBlocks (baseline: `type: "text"`, `text: "role: content\n\n..."`). System/user/assistant are concatenated into one prompt text.
+- Messages are converted to one or more ACP `ContentBlock` values from the python SDK. The gateway uses helpers from `agent-client-protocol` (for example `acp.text_block`) so the resulting JSON matches the official ACP schema.
+- System/user/assistant messages are concatenated into a single text block of the form `\"role: content\"` separated by blank lines.
 
 **Response:** Aggregated text from `session/update` (agent_message_chunk) becomes the assistant message. One choice, `finish_reason` from ACP `stopReason`. `usage` is zero if ACP does not provide token counts.
 

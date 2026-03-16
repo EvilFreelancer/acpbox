@@ -2,6 +2,8 @@
 
 import pytest
 
+from acp.schema import TextContentBlock
+
 from gateway.mapping import (
     acp_aggregated_text_to_chat_completion,
     acp_aggregated_text_to_response_body,
@@ -113,7 +115,10 @@ class TestAcpRunOutputToResponseBody:
 class TestOpenaiMessagesToAcpPromptBlocks:
     def test_single_user(self):
         out = openai_messages_to_acp_prompt_blocks([{"role": "user", "content": "Hi"}])
-        assert out == [{"type": "text", "text": "user: Hi"}]
+        assert len(out) == 1
+        assert isinstance(out[0], TextContentBlock)
+        assert out[0].type == "text"
+        assert out[0].text == "user: Hi"
 
     def test_multiple_messages(self):
         out = openai_messages_to_acp_prompt_blocks([
@@ -121,7 +126,18 @@ class TestOpenaiMessagesToAcpPromptBlocks:
             {"role": "assistant", "content": "Hi"},
             {"role": "user", "content": "Bye"},
         ])
-        assert out == [{"type": "text", "text": "user: Hello\n\nassistant: Hi\n\nuser: Bye"}]
+        assert len(out) == 1
+        assert isinstance(out[0], TextContentBlock)
+        assert out[0].text == "user: Hello\n\nassistant: Hi\n\nuser: Bye"
+
+    def test_metadata_model_prefix_applied(self):
+        out = openai_messages_to_acp_prompt_blocks(
+            [{"role": "user", "content": "Hi"}],
+            metadata={"model": "gpt-4.1-mini"},
+        )
+        assert len(out) == 1
+        assert isinstance(out[0], TextContentBlock)
+        assert out[0].text == "model: gpt-4.1-mini\n\nuser: Hi"
 
     def test_empty_returns_empty(self):
         assert openai_messages_to_acp_prompt_blocks([]) == []
@@ -131,14 +147,27 @@ class TestOpenaiMessagesToAcpPromptBlocks:
 class TestOpenaiResponseInputToAcpPromptBlocks:
     def test_string(self):
         out = openai_response_input_to_acp_prompt_blocks("Hello")
-        assert out == [{"type": "text", "text": "Hello"}]
+        assert len(out) == 1
+        assert isinstance(out[0], TextContentBlock)
+        assert out[0].text == "Hello"
 
     def test_list(self):
         out = openai_response_input_to_acp_prompt_blocks([
             {"role": "user", "content": "Hi"},
             {"role": "assistant", "content": "Bye"},
         ])
-        assert out == [{"type": "text", "text": "user: Hi\n\nassistant: Bye"}]
+        assert len(out) == 1
+        assert isinstance(out[0], TextContentBlock)
+        assert out[0].text == "user: Hi\n\nassistant: Bye"
+
+    def test_response_metadata_model_prefix_applied(self):
+        out = openai_response_input_to_acp_prompt_blocks(
+            "Hello",
+            metadata={"model": "gpt-4.1-mini"},
+        )
+        assert len(out) == 1
+        assert isinstance(out[0], TextContentBlock)
+        assert out[0].text == "model: gpt-4.1-mini\n\nHello"
 
 
 class TestAcpAggregatedTextToChatCompletion:
