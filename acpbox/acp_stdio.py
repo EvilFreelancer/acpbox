@@ -11,7 +11,14 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Sequence
+from collections.abc import AsyncGenerator
+from typing import Any, Literal, Sequence
+
+TurnStreamEvent = (
+    tuple[Literal["text"], str]
+    | tuple[Literal["done"], str]
+    | tuple[Literal["session"], dict[str, Any]]
+)
 
 from acp.schema import TextContentBlock
 
@@ -183,7 +190,7 @@ class AcpRunner:
         prompt_blocks: Sequence[TextContentBlock | dict[str, Any]],
         mode_id: str | None = None,
         request_timeout: float = 300.0,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, list[dict[str, Any]]]:
         """Run one turn: session/new -> [session/set_mode] -> session/prompt. Serialized with _lock."""
         async with self._lock:
             return await self._run_turn_unsafe(prompt_blocks, mode_id, request_timeout)
@@ -193,7 +200,7 @@ class AcpRunner:
         prompt_blocks: Sequence[TextContentBlock | dict[str, Any]],
         mode_id: str | None,
         request_timeout: float,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, list[dict[str, Any]]]:
         if not self._stdin_writer or not self._stdout_reader:
             raise AcpStdioError("ACP process not started")
         await self._do_initialize()
@@ -229,6 +236,7 @@ class AcpRunner:
         }
         await _write_message(self._stdin_writer, req)
         collected_text: list[str] = []
+        session_updates: list[dict[str, Any]] = []
         stop_reason = "end_turn"
         while True:
             msg = await asyncio.wait_for(_read_message(self._stdout_reader), timeout=request_timeout)
@@ -246,10 +254,21 @@ class AcpRunner:
             if msg.get("method") == "session/update":
                 params = msg.get("params") or {}
                 update = params.get("update") or {}
-                if update.get("sessionUpdate") == "agent_message_chunk":
+                if not isinstance(update, dict):
+                    continue
+                sut = update.get("sessionUpdate")
+                if sut == "agent_message_chunk":
                     content = update.get("content") or {}
                     if isinstance(content, dict) and content.get("type") == "text":
                         collected_text.append(content.get("text") or "")
+                    continue
+                if sut:
+                    session_updates.append(
+                        {
+                            "sessionId": params.get("sessionId"),
+                            "update": update,
+                        },
+                    )
                 continue
             if msg.get("method") == "session/request_permission":
                 perm_id = msg.get("id")
@@ -259,7 +278,108 @@ class AcpRunner:
                 continue
             logger.debug("ACP message: %s", msg.get("method") or msg)
         self._next_id += 1
-        return ("".join(collected_text), stop_reason)
+        return ("".join(collected_text), stop_reason, session_updates)
+
+    async def run_turn_stream(
+        self,
+        prompt_blocks: Sequence[TextContentBlock | dict[str, Any]],
+        mode_id: str | None = None,
+        request_timeout: float = 300.0,
+    ) -> AsyncGenerator[TurnStreamEvent, None]:
+        """
+        Same as run_turn but yield:
+        - (\"text\", fragment) per agent_message_chunk (text),
+        - (\"session\", {\"sessionId\", \"update\"}) for other session/update kinds (tool_call, tool_call_update, etc.),
+        - (\"done\", stop_reason) at end.
+        """
+        async with self._lock:
+            async for ev in self._run_turn_stream_unsafe(prompt_blocks, mode_id, request_timeout):
+                yield ev
+
+    async def _run_turn_stream_unsafe(
+        self,
+        prompt_blocks: Sequence[TextContentBlock | dict[str, Any]],
+        mode_id: str | None,
+        request_timeout: float,
+    ) -> AsyncGenerator[TurnStreamEvent, None]:
+        if not self._stdin_writer or not self._stdout_reader:
+            raise AcpStdioError("ACP process not started")
+        await self._do_initialize()
+        prompt_payload = _serialize_prompt_blocks(prompt_blocks)
+        new_result = await _request(
+            self._stdin_writer,
+            self._stdout_reader,
+            self._next_id,
+            "session/new",
+            {"cwd": self._workspace_dir, "mcpServers": []},
+            timeout=request_timeout,
+        )
+        self._next_id += 1
+        session_id = new_result.get("sessionId")
+        if not session_id:
+            raise AcpStdioError("session/new did not return sessionId")
+        if mode_id:
+            await _request(
+                self._stdin_writer,
+                self._stdout_reader,
+                self._next_id,
+                "session/set_mode",
+                {"sessionId": session_id, "modeId": mode_id},
+                timeout=request_timeout,
+            )
+            self._next_id += 1
+        prompt_id = self._next_id
+        req = {
+            "jsonrpc": "2.0",
+            "id": prompt_id,
+            "method": "session/prompt",
+            "params": {"sessionId": session_id, "prompt": prompt_payload},
+        }
+        await _write_message(self._stdin_writer, req)
+        stop_reason = "end_turn"
+        while True:
+            msg = await asyncio.wait_for(_read_message(self._stdout_reader), timeout=request_timeout)
+            if msg is None:
+                raise AcpStdioError("EOF before session/prompt response")
+            if "id" in msg and msg["id"] == prompt_id:
+                if "error" in msg:
+                    err = msg["error"]
+                    raise AcpStdioError(
+                        err.get("message", "Unknown error") or f"code={err.get('code')}"
+                    )
+                result = msg.get("result") or {}
+                stop_reason = result.get("stopReason", "end_turn")
+                break
+            if msg.get("method") == "session/update":
+                params = msg.get("params") or {}
+                update = params.get("update") or {}
+                if not isinstance(update, dict):
+                    continue
+                sut = update.get("sessionUpdate")
+                if sut == "agent_message_chunk":
+                    content = update.get("content") or {}
+                    if isinstance(content, dict) and content.get("type") == "text":
+                        piece = content.get("text") or ""
+                        yield ("text", piece)
+                    continue
+                if sut:
+                    yield (
+                        "session",
+                        {
+                            "sessionId": params.get("sessionId"),
+                            "update": update,
+                        },
+                    )
+                continue
+            if msg.get("method") == "session/request_permission":
+                perm_id = msg.get("id")
+                if perm_id is not None:
+                    reply = {"jsonrpc": "2.0", "id": perm_id, "result": {"outcome": "allow_once"}}
+                    await _write_message(self._stdin_writer, reply)
+                continue
+            logger.debug("ACP message: %s", msg.get("method") or msg)
+        self._next_id += 1
+        yield ("done", str(stop_reason))
 
     async def stop(self) -> None:
         """Terminate the ACP process."""
@@ -354,7 +474,7 @@ async def run_single_turn(
     *,
     mode_id: str | None = None,
     request_timeout: float = 300.0,
-) -> tuple[str, str]:
+) -> tuple[str, str, list[dict[str, Any]]]:
     """
     Spawn ACP agent, run one turn, then terminate. Used when no per-worker runner exists.
     """

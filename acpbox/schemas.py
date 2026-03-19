@@ -53,6 +53,7 @@ class CreateChatCompletionResponse(BaseModel):
     model: str
     choices: list[ChatCompletionChoice]
     usage: Usage | None = None
+    acp: dict[str, Any] | None = None
 
 
 # ----- OpenAI Responses API (stateful) -----
@@ -100,6 +101,7 @@ class CreateResponseBody(BaseModel):
     output: list[ResponseOutputMessage] = Field(default_factory=list)
     usage: ResponseUsage | None = None
     chat_id: str | None = None  # Extension: return session id for next request
+    acp: dict[str, Any] | None = None
 
 
 class DeletedResponse(BaseModel):

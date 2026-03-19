@@ -45,7 +45,7 @@ async def create_response(body: CreateResponseRequest, request: Request) -> Crea
         )
     runner = request.app.state.runner
     try:
-        text, _stop_reason = await runner.run_turn(
+        text, _stop_reason, acp_updates = await runner.run_turn(
             prompt_blocks=prompt_blocks,
             mode_id=body.model or None,
         )
@@ -56,7 +56,13 @@ async def create_response(body: CreateResponseRequest, request: Request) -> Crea
         ) from e
     response_id = new_response_id()
     register_response(response_id, chat_id)
-    return acp_aggregated_text_to_response_body(text, body.model, response_id, chat_id)
+    return acp_aggregated_text_to_response_body(
+        text,
+        body.model,
+        response_id,
+        chat_id,
+        acp_raw=acp_updates,
+    )
 
 
 @router_responses.get("/{response_id}")

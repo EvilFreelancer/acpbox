@@ -13,8 +13,8 @@ Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](http
 3. **Reuse per request** – Each request in that worker uses the same process: `session/new` -> optional `session/set_mode` -> `session/prompt`, then the response is returned. The process is not terminated after each request.
 4. **Translation** – OpenAI requests are converted to ACP JSON-RPC; ACP content (e.g. `session/update` agent_message_chunk) is converted back to OpenAI chat/responses format.
    - `GET /v1/models` – Uses the worker's ACP process: `initialize` (once) and `session/new`, returns **modes** (`modes.availableModes[].id`, e.g. OpenCode's `plan`, `build`) as the list of models.
-   - `POST /v1/chat/completions` – Uses the worker's ACP process; `model` selects the ACP mode. Reply as chat completion.
-   - `POST /v1/responses` – Same; optional `chat_id` for client-side continuity.
+   - `POST /v1/chat/completions` – Uses the worker's ACP process; `model` selects the ACP mode. Reply as chat completion, or **Server-Sent Events** when `"stream": true` (OpenAI-style `chat.completion.chunk` lines and `data: [DONE]`). With `stream: false`, optional **`acp`** is `{ "steps": [ reasoning + command summaries ] }` (no raw chunks). With `stream: true`, each chunk may still carry raw **`acp`** from the wire (see `docs/api-mapping.md`).
+   - `POST /v1/responses` – Same; optional `chat_id` for client-side continuity (non-streaming only); **`acp.steps`** when present, like chat.
 
 See [docs/spec.md](docs/spec.md) and [docs/agent-client-protocol/docs/protocol/transports.mdx](docs/agent-client-protocol/docs/protocol/transports.mdx) for details.
 

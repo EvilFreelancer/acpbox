@@ -27,8 +27,8 @@ ACP is a standard for communication between AI agents and clients. Key facts:
 |-----------------|------------------|
 | `GET /v1/models` | Use worker's ACP process: initialize (if needed), session/new -> `modes.availableModes`; return those ids as models. 503 if agent fails. |
 | `GET /v1/models/{id}` | Same; return one model if id is in the agent's mode list; else 404. |
-| `POST /v1/chat/completions` | Use worker's ACP process: session/new -> optional session/set_mode -> session/prompt -> aggregate agent text from session/update -> return OpenAI chat completion. |
-| `POST /v1/responses` | Same as above; optional `chat_id` for client continuity (each request still uses a new session on the same process). |
+| `POST /v1/chat/completions` | Use worker's ACP process: session/new -> optional session/set_mode -> session/prompt -> aggregate agent text from session/update -> return OpenAI chat completion with optional JSON **`acp.steps`** (summarized reasoning + commands when `stream: false`), or **SSE** when `stream: true` (raw **`acp`** per chunk; terminal `data: [DONE]`). |
+| `POST /v1/responses` | Same as above; optional `chat_id` for client continuity; optional **`acp.steps`** like chat non-stream. |
 | `DELETE /v1/responses/{id}`, `DELETE /v1/sessions/{id}` | Gateway-only session store; no ACP call. |
 
 ## Conventions

@@ -26,8 +26,17 @@ class MockRunner:
         prompt_blocks: list[Any],
         mode_id: str | None = None,
         request_timeout: float = 300.0,
-    ) -> tuple[str, str]:
-        return ("Reply", "end_turn")
+    ) -> tuple[str, str, list[dict[str, Any]]]:
+        return ("Reply", "end_turn", [])
+
+    async def run_turn_stream(
+        self,
+        prompt_blocks: list[Any],
+        mode_id: str | None = None,
+        request_timeout: float = 300.0,
+    ):
+        yield ("text", "Reply")
+        yield ("done", "end_turn")
 
 
 @pytest.fixture

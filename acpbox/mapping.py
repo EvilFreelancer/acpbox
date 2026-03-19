@@ -164,11 +164,140 @@ def openai_response_input_to_acp_input(input_value: str | list[dict[str, Any]]) 
     return acp_messages
 
 
+def acp_stop_reason_to_openai_finish(stop_reason: str) -> str:
+    """Map ACP session/prompt stopReason to OpenAI chat finish_reason (chunk field)."""
+    if stop_reason in ("end_turn",):
+        return "stop"
+    return "stop"
+
+
+def summarize_acp_session_for_non_stream(
+    raw: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """
+    Collapse raw ACP session/update trace from run_turn into ordered steps for JSON responses
+    (stream=false only): merged reasoning segments and one entry per tool call (final fields).
+    Omits streaming-style noise (usage_update, mode updates, etc.).
+    """
+    if not raw:
+        return None
+    steps: list[dict[str, Any]] = []
+    reasoning_buf: list[str] = []
+    command_index: dict[str, int] = {}
+    ignored = frozenset(
+        {
+            "usage_update",
+            "config_option_update",
+            "current_mode_update",
+            "available_commands_update",
+            "session_info_update",
+            "plan",
+            "user_message_chunk",
+            "agent_message_chunk",
+        },
+    )
+
+    def flush_reasoning() -> None:
+        if not reasoning_buf:
+            return
+        text = "".join(reasoning_buf).strip()
+        reasoning_buf.clear()
+        if text:
+            steps.append({"type": "reasoning", "text": text})
+
+    def ensure_command(tool_call_id: str, seed: dict[str, Any]) -> int:
+        if tool_call_id not in command_index:
+            steps.append(
+                {
+                    "type": "command",
+                    "tool_call_id": tool_call_id,
+                    "title": seed.get("title"),
+                    "kind": seed.get("kind"),
+                    "status": seed.get("status"),
+                    "command": None,
+                    "description": None,
+                    "output": None,
+                    "exit_code": None,
+                },
+            )
+            command_index[tool_call_id] = len(steps) - 1
+        return command_index[tool_call_id]
+
+    def merge_into_command(idx: int, update: dict[str, Any]) -> None:
+        st = steps[idx]
+        ri = update.get("rawInput")
+        if isinstance(ri, dict):
+            if ri.get("command"):
+                st["command"] = ri["command"]
+            if ri.get("description"):
+                st["description"] = ri["description"]
+        if update.get("title"):
+            st["title"] = update["title"]
+        if update.get("kind"):
+            st["kind"] = update["kind"]
+        if update.get("status"):
+            st["status"] = update["status"]
+        ro = update.get("rawOutput")
+        if isinstance(ro, dict):
+            out = ro.get("output")
+            md = ro.get("metadata")
+            if isinstance(md, dict):
+                if out is None and md.get("output") is not None:
+                    out = md.get("output")
+                if "exit" in md:
+                    st["exit_code"] = md.get("exit")
+            if out is not None:
+                st["output"] = out
+        for block in update.get("content") or []:
+            if not isinstance(block, dict) or block.get("type") != "content":
+                continue
+            inner = block.get("content") or {}
+            if isinstance(inner, dict) and inner.get("type") == "text":
+                piece = inner.get("text") or ""
+                if piece:
+                    prev = st.get("output") or ""
+                    st["output"] = prev + piece
+
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        update = item.get("update")
+        if not isinstance(update, dict):
+            continue
+        sut = update.get("sessionUpdate")
+        if sut == "agent_thought_chunk":
+            content = update.get("content") or {}
+            if isinstance(content, dict) and content.get("type") == "text":
+                reasoning_buf.append(content.get("text") or "")
+            continue
+        if sut in ignored:
+            continue
+        flush_reasoning()
+        if sut == "tool_call":
+            tid = update.get("toolCallId")
+            if isinstance(tid, str) and tid:
+                idx = ensure_command(tid, update)
+                merge_into_command(idx, update)
+            continue
+        if sut == "tool_call_update":
+            tid = update.get("toolCallId")
+            if isinstance(tid, str) and tid:
+                idx = ensure_command(tid, update)
+                merge_into_command(idx, update)
+            continue
+
+    flush_reasoning()
+    if not steps:
+        return None
+    return {"steps": steps}
+
+
 def acp_aggregated_text_to_chat_completion(
     aggregated_text: str,
     model: str,
     run_id: str | None = None,
     finish_reason: str = "stop",
+    acp_raw: list[dict[str, Any]] | None = None,
 ) -> CreateChatCompletionResponse:
     """Build OpenAI chat.completion from ACP stdio aggregated agent text."""
     choice = ChatCompletionChoice(
@@ -183,7 +312,35 @@ def acp_aggregated_text_to_chat_completion(
         model=model,
         choices=[choice],
         usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        acp=summarize_acp_session_for_non_stream(acp_raw),
     )
+
+
+def chat_completion_chunk_sse_dict(
+    *,
+    completion_id: str,
+    created: int,
+    model: str,
+    delta: dict[str, Any],
+    finish_reason: str | None = None,
+    acp: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One OpenAI chat.completion.chunk object (serialized to JSON for SSE data: lines)."""
+    choice: dict[str, Any] = {"index": 0, "delta": delta}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    else:
+        choice["finish_reason"] = None
+    out: dict[str, Any] = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [choice],
+    }
+    if acp is not None:
+        out["acp"] = acp
+    return out
 
 
 def acp_run_output_to_chat_completion(
@@ -208,6 +365,7 @@ def acp_aggregated_text_to_response_body(
     model: str,
     response_id: str,
     chat_id: str | None = None,
+    acp_raw: list[dict[str, Any]] | None = None,
 ) -> CreateResponseBody:
     """Build OpenAI response object from ACP stdio aggregated agent text."""
     out_message = ResponseOutputMessage(
@@ -221,6 +379,7 @@ def acp_aggregated_text_to_response_body(
         output=[out_message],
         usage=ResponseUsage(input_tokens=0, output_tokens=0, total_tokens=0),
         chat_id=chat_id,
+        acp=summarize_acp_session_for_non_stream(acp_raw),
     )
 
 

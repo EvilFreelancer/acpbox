@@ -7,6 +7,7 @@ from acp.schema import TextContentBlock
 from acpbox.mapping import (
     acp_aggregated_text_to_chat_completion,
     acp_aggregated_text_to_response_body,
+    summarize_acp_session_for_non_stream,
     acp_run_output_to_chat_completion,
     acp_run_output_to_response_body,
     openai_messages_to_acp_input,
@@ -175,6 +176,81 @@ class TestAcpAggregatedTextToChatCompletion:
         resp = acp_aggregated_text_to_chat_completion("Hello", "my-model")
         assert resp.choices[0].message.content == "Hello"
         assert resp.model == "my-model"
+        assert resp.acp is None
+
+    def test_acp_summarized_tool(self):
+        raw = [
+            {
+                "sessionId": "x",
+                "update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "bash"},
+            },
+        ]
+        resp = acp_aggregated_text_to_chat_completion("Hi", "m", acp_raw=raw)
+        assert resp.acp == {
+            "steps": [
+                {
+                    "type": "command",
+                    "tool_call_id": "t1",
+                    "title": "bash",
+                    "kind": None,
+                    "status": None,
+                    "command": None,
+                    "description": None,
+                    "output": None,
+                    "exit_code": None,
+                },
+            ],
+        }
+
+
+class TestSummarizeAcpNonStream:
+    def test_merges_adjacent_thought_chunks(self):
+        raw = [
+            {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "A"}}},
+            {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "B"}}},
+        ]
+        out = summarize_acp_session_for_non_stream(raw)
+        assert out == {"steps": [{"type": "reasoning", "text": "AB"}]}
+
+    def test_merges_tool_call_updates_into_one_step(self):
+        raw = [
+            {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c1",
+                    "title": "bash",
+                    "status": "pending",
+                },
+            },
+            {
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "status": "in_progress",
+                    "rawInput": {"command": "echo 1", "description": "d"},
+                },
+            },
+            {
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "status": "completed",
+                    "rawOutput": {"output": "1\n", "metadata": {"exit": 0}},
+                },
+            },
+        ]
+        out = summarize_acp_session_for_non_stream(raw)
+        assert len(out["steps"]) == 1
+        s = out["steps"][0]
+        assert s["type"] == "command"
+        assert s["command"] == "echo 1"
+        assert s["output"] == "1\n"
+        assert s["exit_code"] == 0
+        assert s["status"] == "completed"
+
+    def test_drops_usage_update(self):
+        raw = [{"update": {"sessionUpdate": "usage_update", "used": 1}}]
+        assert summarize_acp_session_for_non_stream(raw) is None
 
 
 class TestAcpAggregatedTextToResponseBody:
@@ -182,6 +258,7 @@ class TestAcpAggregatedTextToResponseBody:
         resp = acp_aggregated_text_to_response_body("Reply", "m", "resp_1", "chat_1")
         assert resp.output[0].content[0].text == "Reply"
         assert resp.chat_id == "chat_1"
+        assert resp.acp is None
 
 
 class TestNewIds:

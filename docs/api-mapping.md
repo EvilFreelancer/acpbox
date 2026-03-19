@@ -22,9 +22,11 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 - Messages are converted to one or more ACP `ContentBlock` values from the python SDK. The gateway uses helpers from `agent-client-protocol` (for example `acp.text_block`) so the resulting JSON matches the official ACP schema.
 - System/user/assistant messages are concatenated into a single text block of the form `\"role: content\"` separated by blank lines.
 
-**Response:** Aggregated text from `session/update` (agent_message_chunk) becomes the assistant message. One choice, `finish_reason` from ACP `stopReason`. `usage` is zero if ACP does not provide token counts.
+**Non-stream response:** Aggregated text from `session/update` (agent_message_chunk) becomes the assistant message. One choice, `finish_reason` from ACP `stopReason`. `usage` is zero if ACP does not provide token counts. The JSON body may include **`acp`**: `{ "steps": [ ... ] }` where each step is either `{ "type": "reasoning", "text": "<merged agent_thought_chunk text in order>" }` or `{ "type": "command", "tool_call_id", "title", "kind", "status", "command", "description", "output", "exit_code" }` (one row per tool, fields merged from `tool_call` / `tool_call_update`). Streaming noise such as `usage_update`, mode updates, and `plan` is omitted. Omitted or null when there are no steps.
 
-**Limitations:** `stream: true` is not supported (400).
+**Streaming (`stream: true`):** Response `Content-Type: text/event-stream`. Each line is `data: ` + JSON object with `object: "chat.completion.chunk"`, same `id` for the request, then a terminal `data: [DONE]`. The gateway maps each ACP `agent_message_chunk` to a chunk with `choices[0].delta.content`. Additional ACP `session/update` kinds (`tool_call`, `tool_call_update`, `agent_thought_chunk`, `plan`, and other variants) are forwarded as separate chunk objects with an empty `choices[0].delta` and an **`acp`** object: `{ "sessionId", "update" }` where **`update`** is the ACP payload (includes **`sessionUpdate`**). Standard OpenAI clients can ignore **`acp`**; curl and custom UIs can show agent progress. The first text delta may be preceded by **`acp`**-only chunks. The first delta with assistant text may include `role: assistant` only; the last chunk has `choices[0].finish_reason` (ACP `end_turn` maps to `stop`). If `session/prompt` fails before the first chunk, the server returns **503** with the usual JSON error body (same as non-stream).
+
+**Limitations:** `/v1/responses` does not support streaming. Only `/v1/chat/completions` honors `stream`.
 
 ## Responses (stateful)
 
@@ -37,10 +39,10 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 **Request mapping:** `input` (string or list of items) -> ACP prompt content blocks (same as chat).
 
-**Response:** Same as chat: aggregated text -> `output[].content[].text`, plus `id`, `chat_id`, `usage`.
+**Response:** Same as chat: aggregated text -> `output[].content[].text`, plus `id`, `chat_id`, `usage`, and optional **`acp`** (same `steps` summary as chat non-stream).
 
 ## Error format
 
 - ACP stdio errors (e.g. from `AcpStdioError`) are mapped to 503 with OpenAI-style body.
-- Validation errors (empty messages, stream not supported) -> 400.
+- Validation errors (empty messages) -> 400.
 - Response body is always OpenAI-style: `{ "error": { "code", "message", "type" } }`.
