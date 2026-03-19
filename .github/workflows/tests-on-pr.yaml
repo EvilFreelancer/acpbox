@@ -31,4 +31,4 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ -v -m "not integration" --cov=coddy --cov-report=term-missing
+        run: pytest tests/ -v -m "not integration" --cov=acpbox --cov-report=term-missing
