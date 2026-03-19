@@ -1,5 +1,6 @@
 # Tag a new SemVer version when a PR is merged into the default branch (not on direct push to main).
 # Starts from v0.1.0 if no tags exist; bumps patch (e.g. v0.1.0 -> v0.1.1) on each merge.
+# After the push of v*, publish-pypi.yaml runs (push tags filter) and uploads the wheel to PyPI.
 
 name: Tag release on merge
 
@@ -21,7 +22,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     permissions:
       contents: write
-      actions: write
 
     steps:
       - name: Checkout repository
@@ -69,16 +69,3 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           git tag -a "$TAG" -m "Release $TAG (auto-tag on merge)"
           git push origin "$TAG"
-
-      - name: Trigger Docker build
-        if: steps.check.outputs.skip != 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'docker-build-push.yaml',
-              ref: 'main',
-              inputs: { tag: '${{ steps.version.outputs.tag }}' }
-            });
