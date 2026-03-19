@@ -2,7 +2,7 @@
 
 import pytest
 
-from gateway.acp_stdio import AcpStdioError
+from acpbox.acp_stdio import AcpStdioError
 
 
 def test_create_response_ok(client):

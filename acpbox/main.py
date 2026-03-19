@@ -1,15 +1,18 @@
 """FastAPI app: one ACP process per uvicorn worker (lifespan), OpenAI-compatible routes."""
 
+import inspect
 import logging
+import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from pathlib import Path
+from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from gateway.acp_stdio import AcpRunner, AcpStdioError
-from gateway.config import Config
-from gateway.routes import chat, models, responses
+from acpbox.acp_stdio import AcpRunner, AcpStdioError
+from acpbox.config import Config
+from acpbox.routes import chat, models, responses
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,16 +70,49 @@ def create_app(config_path: str | None = None) -> FastAPI:
     return app
 
 
-def run(config_path: str | None = None) -> None:
-    """Load config, create app, run uvicorn. Used by __main__ and Docker."""
-    config = Config.load(config_path)
-    app = create_app(config_path)
+def _uvicorn_extra_kwargs(config: Config) -> dict[str, Any]:
+    """Build optional uvicorn.run keyword args that exist in the installed uvicorn version."""
     import uvicorn
-    uvicorn.run(
-        app,
-        host=config.gateway.host,
-        port=config.gateway.port,
-    )
+
+    out: dict[str, Any] = {}
+    sig = inspect.signature(uvicorn.run)
+    if "threads" in sig.parameters:
+        out["threads"] = config.gateway.threads
+    return out
+
+
+def run(config_path: str | None = None) -> None:
+    """Load config and run uvicorn. Used by __main__, acpbox CLI, and Docker."""
+    if config_path is not None:
+        os.environ["CONFIG_PATH"] = str(Path(config_path).resolve())
+
+    config = Config.load(None)
+    import uvicorn
+
+    extra = _uvicorn_extra_kwargs(config)
+    if config.gateway.threads != 1 and "threads" not in extra:
+        logger.warning(
+            "GATEWAY_THREADS=%s is ignored: this uvicorn has no threads= argument (ASGI uses asyncio).",
+            config.gateway.threads,
+        )
+
+    if config.gateway.workers > 1:
+        uvicorn.run(
+            "acpbox.main:create_app",
+            factory=True,
+            host=config.gateway.host,
+            port=config.gateway.port,
+            workers=config.gateway.workers,
+            **extra,
+        )
+    else:
+        app = create_app(None)
+        uvicorn.run(
+            app,
+            host=config.gateway.host,
+            port=config.gateway.port,
+            **extra,
+        )
 
 
 if __name__ == "__main__":

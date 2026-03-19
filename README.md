@@ -1,4 +1,4 @@
-# ACP OpenAI API Gateway
+# ACPBox
 
 OpenAI-compatible HTTP API that acts as a **gateway to the Agent Client Protocol (ACP)**. Clients use the usual OpenAI endpoints (`/v1/models`, `/v1/chat/completions`, `/v1/responses`); the gateway runs the API with **uvicorn** and keeps **one ACP agent process per worker** over **stdio** (JSON-RPC), not HTTP.
 
@@ -51,16 +51,17 @@ sequenceDiagram
 
    Use an absolute path if the binary is not on `PATH` (e.g. `["/home/you/.local/bin/agent","acp"]`). Cursor Agent must be installed and logged in (`agent login`) so the subprocess can reach your account.
 
-3. **Run** – From the repo root. The app uses **uvicorn** (listed in `requirements.txt`). Default is a single worker (one ACP instance). For production, run uvicorn with `--workers N` to get N ACP agent processes (one per worker):
+3. **Run** – Install the package (adds the **`acpbox`** CLI). The process manager is **uvicorn** (see `pyproject.toml`). Use **`gateway.workers`** in YAML or **`GATEWAY_WORKERS`** in the environment for process count (one ACP subprocess per worker). **`GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your installed uvicorn exposes a matching `threads=` argument (current releases usually do not; ASGI uses **asyncio** per process).
 
 ```bash
+pip install .
+CONFIG_PATH=config.yaml acpbox
+# Or from a checkout without installing the script:
 pip install -r requirements.txt
-CONFIG_PATH=config.yaml python -m gateway.main
-# Or explicitly with more workers (e.g. 8 workers = 8 ACP binary instances):
-# uvicorn gateway.main:create_app --factory --host 0.0.0.0 --port 8080 --workers 8
+CONFIG_PATH=config.yaml python -m acpbox.main
 ```
 
-Or with Docker Compose (reads `.env` and runs the `gateway` service). Set **`AGENTS`** in `.env` for the image build (comma-separated `opencode`, `cursor`); the compose file passes it as a build-arg. After changing `AGENTS`, run `docker compose build --no-cache gateway` so installers run again. Runtime **`ACP_COMMAND`** must match the installed binary (see Agent command table above). The Dockerfile runs the app via `python -m gateway.main`, which starts uvicorn with one worker by default; override the command to use more workers if needed.
+Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` for the image build (comma-separated `opencode`, `cursor`); the compose file passes it as a build-arg. After changing `AGENTS`, run `docker compose build --no-cache acpbox` so installers run again. Runtime **`ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`GATEWAY_WORKERS`** and **`GATEWAY_THREADS`** passed through the environment.
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 
@@ -71,13 +72,13 @@ Tests use a mock ACP over stdio (fake subprocess that responds with JSON-RPC). R
 From repo root:
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
 ## Adding your own ACP in Docker
 
-Build an image that includes the gateway and your ACP agent binary (e.g. `opencode acp`). Set `acp.command` and `acp.env` in config or `.env`. The server runs with **uvicorn**; each worker starts one ACP process in lifespan. To run 8 ACP instances, use `uvicorn ... --workers 8`. See [docs/deployment.md](docs/deployment.md).
+Build an image that includes **acpbox** and your ACP agent binary (e.g. `opencode acp`). Set `acp.command` and `acp.env` in config or `.env`. The server runs with **uvicorn** via **`acpbox`**; each worker starts one ACP process in lifespan. To run 8 ACP instances, set **`GATEWAY_WORKERS=8`** (or **`gateway.workers`** in YAML). See [docs/deployment.md](docs/deployment.md).
 
 ## Specifications
 

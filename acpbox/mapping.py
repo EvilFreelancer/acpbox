@@ -7,7 +7,7 @@ from typing import Any
 from acp import text_block
 from acp.schema import TextContentBlock
 
-from gateway.schemas import (
+from acpbox.schemas import (
     ChatCompletionChoice,
     ChatCompletionChoiceMessage,
     CreateChatCompletionResponse,

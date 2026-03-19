@@ -64,6 +64,19 @@ class GatewayConfig(BaseSettings):
 
     host: str = Field(default="0.0.0.0", description="Host to bind. Env: GATEWAY_HOST.")
     port: int = Field(default=8080, ge=1, le=65535, description="Port for the gateway. Env: GATEWAY_PORT.")
+    workers: int = Field(
+        default=1,
+        ge=1,
+        description="Uvicorn worker processes (one ACP subprocess per worker). Env: GATEWAY_WORKERS.",
+    )
+    threads: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Forwarded to uvicorn.run only if that release defines a matching parameter "
+            "(today ASGI uvicorn uses asyncio, not an OS thread pool). Env: GATEWAY_THREADS."
+        ),
+    )
 
 
 class Config(BaseSettings):

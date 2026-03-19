@@ -139,7 +139,7 @@ class AcpRunner:
             {
                 "protocolVersion": 1,
                 "clientCapabilities": {},
-                "clientInfo": {"name": "acp-openapi-gateway", "version": "0.1.0"},
+                "clientInfo": {"name": "acpbox", "version": "0.1.0"},
             },
             timeout=30.0,
         )
@@ -313,7 +313,7 @@ async def get_agent_models(
             {
                 "protocolVersion": 1,
                 "clientCapabilities": {},
-                "clientInfo": {"name": "acp-openapi-gateway", "version": "0.1.0"},
+                "clientInfo": {"name": "acpbox", "version": "0.1.0"},
             },
             timeout=timeout,
         )

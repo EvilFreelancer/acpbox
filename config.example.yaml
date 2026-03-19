@@ -1,4 +1,4 @@
-# Example gateway config. Copy to config.yaml and adjust.
+# Example acpbox config. Copy to config.yaml and adjust.
 # Every option can be overridden via environment variables (see .env.example).
 # ACP uses stdio (one agent process per request); no HTTP to the agent.
 
@@ -12,3 +12,5 @@ acp:
 gateway:
   host: "0.0.0.0"
   port: 8080
+  workers: 1
+  threads: 1

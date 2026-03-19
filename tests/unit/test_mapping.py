@@ -1,10 +1,10 @@
-"""Unit tests for gateway.mapping (OpenAI <-> ACP message conversion)."""
+"""Unit tests for acpbox.mapping (OpenAI <-> ACP message conversion)."""
 
 import pytest
 
 from acp.schema import TextContentBlock
 
-from gateway.mapping import (
+from acpbox.mapping import (
     acp_aggregated_text_to_chat_completion,
     acp_aggregated_text_to_response_body,
     acp_run_output_to_chat_completion,

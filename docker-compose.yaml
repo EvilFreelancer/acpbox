@@ -5,7 +5,7 @@ x-shared-logs: &shared-logs
       max-size: "100k"
 
 services:
-  gateway:
+  acpbox:
     build:
       context: .
       dockerfile: Dockerfile
@@ -23,6 +23,8 @@ services:
       - ACP_STARTUP_TIMEOUT_SECONDS=${ACP_STARTUP_TIMEOUT_SECONDS:-30}
       - GATEWAY_HOST=${GATEWAY_HOST:-0.0.0.0}
       - GATEWAY_PORT=${GATEWAY_PORT:-8080}
+      - GATEWAY_WORKERS=${GATEWAY_WORKERS:-1}
+      - GATEWAY_THREADS=${GATEWAY_THREADS:-1}
       - GATEWAY_ACP_BASE_URL=${GATEWAY_ACP_BASE_URL:-http://127.0.0.1:8000}
       # Agent API keys
       - CURSOR_API_KEY=${CURSOR_API_KEY:-}

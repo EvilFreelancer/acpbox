@@ -1,9 +1,9 @@
-"""Unit tests for gateway.errors (ACP code -> HTTP status, OpenAI error body)."""
+"""Unit tests for acpbox.errors (ACP code -> HTTP status, OpenAI error body)."""
 
 import pytest
 from fastapi import status
 
-from gateway.errors import acp_code_to_http_status, openai_error_body
+from acpbox.errors import acp_code_to_http_status, openai_error_body
 
 
 def test_acp_code_to_http_status_invalid_input():

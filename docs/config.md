@@ -1,6 +1,6 @@
 # Configuration
 
-The gateway is configured via a YAML file and/or environment variables. Env overrides YAML. Use `config.example.yaml` as a template. Every option can be set via env; see `.env.example`.
+**acpbox** is configured via a YAML file and/or environment variables. Env overrides YAML. Use `config.example.yaml` as a template. Every option can be set via env; see `.env.example`.
 
 ## YAML structure
 
@@ -12,6 +12,8 @@ acp:
 gateway:
   host: "0.0.0.0"
   port: 8080
+  workers: 1
+  threads: 1
 ```
 
 ## Fields
@@ -32,6 +34,8 @@ gateway:
 |-------|------|---------|-------------|
 | `host` | string | `0.0.0.0` | Host to bind the gateway HTTP server. |
 | `port` | integer | 8080 | Port for the gateway. |
+| `workers` | integer | 1 | Uvicorn worker **processes** (minimum 1). One ACP agent process per worker. |
+| `threads` | integer | 1 | Passed to **`uvicorn.run`** only if supported. Typical uvicorn ASGI builds have **no** `threads=` parameter (asyncio event loop per process). |
 
 ## Environment variables
 
@@ -43,6 +47,8 @@ gateway:
 | `ACP_WORKSPACE` | acp | Project directory for ACP `session/new` cwd. Default `./workspace`; Docker image sets `/workspace`. |
 | `GATEWAY_HOST` | gateway | Host to bind. |
 | `GATEWAY_PORT` | gateway | Port. |
+| `GATEWAY_WORKERS` | gateway | Uvicorn worker process count. |
+| `GATEWAY_THREADS` | gateway | Used only if **`uvicorn.run`** in your environment accepts **`threads`**. |
 
 ## Examples
 
@@ -52,18 +58,18 @@ gateway:
 export ACP_COMMAND='["opencode","acp"]'
 export ACP_WORKSPACE=./workspace
 export GATEWAY_PORT=8080
-python -m gateway.main
+acpbox
 ```
 
 **File + override:**
 
 ```bash
-CONFIG_PATH=config.yaml GATEWAY_PORT=9090 python -m gateway.main
+CONFIG_PATH=config.yaml GATEWAY_PORT=9090 python -m acpbox.main
 ```
 
 **Docker Compose** (reads `.env`):
 
 ```bash
 cp .env.example .env
-docker compose up --build gateway
+docker compose up --build acpbox
 ```

@@ -1,5 +1,5 @@
 .git
-*.md
+docs/
 
 __pycache__
 *.pyc

@@ -1,4 +1,4 @@
-"""Pytest fixtures for gateway tests. ACP is mocked via app.state.runner (per-worker runner)."""
+"""Pytest fixtures for acpbox tests. ACP is mocked via app.state.runner (per-worker runner)."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -8,11 +8,11 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from gateway.config import Config
-from gateway.routes import chat, models, responses
+from acpbox.config import Config
+from acpbox.routes import chat, models, responses
 
 # Reduce noise in tests
-logging.getLogger("gateway").setLevel(logging.WARNING)
+logging.getLogger("acpbox").setLevel(logging.WARNING)
 
 
 class MockRunner:

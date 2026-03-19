@@ -2,13 +2,13 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from gateway.acp_stdio import AcpStdioError
-from gateway.errors import openai_error_body
-from gateway.mapping import (
+from acpbox.acp_stdio import AcpStdioError
+from acpbox.errors import openai_error_body
+from acpbox.mapping import (
     acp_aggregated_text_to_chat_completion,
     openai_messages_to_acp_prompt_blocks,
 )
-from gateway.schemas import CreateChatCompletionRequest, CreateChatCompletionResponse
+from acpbox.schemas import CreateChatCompletionRequest, CreateChatCompletionResponse
 
 router = APIRouter(prefix="/v1/chat/completions", tags=["Chat"])
 

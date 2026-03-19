@@ -2,19 +2,19 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from gateway.acp_stdio import AcpStdioError
-from gateway.errors import openai_error_body
-from gateway.mapping import (
+from acpbox.acp_stdio import AcpStdioError
+from acpbox.errors import openai_error_body
+from acpbox.mapping import (
     acp_aggregated_text_to_response_body,
     new_response_id,
     openai_response_input_to_acp_prompt_blocks,
 )
-from gateway.schemas import (
+from acpbox.schemas import (
     CreateResponseBody,
     CreateResponseRequest,
     DeletedResponse,
 )
-from gateway.session_store import (
+from acpbox.session_store import (
     chat_id_or_new,
     delete_response,
     delete_session,

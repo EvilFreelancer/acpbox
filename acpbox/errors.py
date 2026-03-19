@@ -2,7 +2,7 @@
 
 from fastapi import status
 
-from gateway.schemas import OpenAIErrorBody
+from acpbox.schemas import OpenAIErrorBody
 
 
 def acp_code_to_http_status(code: str) -> int:

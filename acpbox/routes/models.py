@@ -5,9 +5,9 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
-from gateway.acp_stdio import AcpStdioError
-from gateway.errors import openai_error_body
-from gateway.schemas import ListModelsResponse, ModelObject
+from acpbox.acp_stdio import AcpStdioError
+from acpbox.errors import openai_error_body
+from acpbox.schemas import ListModelsResponse, ModelObject
 
 router = APIRouter(prefix="/v1/models", tags=["Models"])
 logger = logging.getLogger(__name__)

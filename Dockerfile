@@ -20,12 +20,12 @@ RUN set -eux; \
     case "${agents}" in (*,opencode,*) install_opencode=1 ;; esac; \
     case "${agents}" in (*,cursor,*) install_cursor=1 ;; esac; \
     if [ "${install_opencode}" = "0" ] && [ "${install_cursor}" = "0" ]; then \
-      echo "AGENTS build-arg empty or without opencode|cursor; image contains gateway only. Install an ACP agent in a derived image or mount a binary."; \
+      echo "AGENTS build-arg empty or without opencode|cursor; image contains acpbox only. Install an ACP agent in a derived image or mount a binary."; \
     else \
       apt-get update; \
       apt-get install -y --no-install-recommends curl ca-certificates bash; \
       if [ "${install_opencode}" = "1" ]; then \
-        su user -s /bin/bash -c 'curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path'; \
+        su user -s /bin/bash -c 'curl -fsSL https://opencode.ai/install | bash'; \
         su user -s /bin/bash -c 'command -v opencode'; \
       fi; \
       if [ "${install_cursor}" = "1" ]; then \
@@ -37,19 +37,17 @@ RUN set -eux; \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN chown -R user:user /app \
+RUN pip install --no-cache-dir . \
+ && chown -R user:user /app \
  && mkdir -p /workspace \
  && chown user:user /workspace
 
 ENV ACP_WORKSPACE=/workspace
+ENV CONFIG_PATH=/app/config.yaml
 
 EXPOSE 8080
 
 USER user
 
-# Runs uvicorn (via gateway.main) with one worker = one ACP process. For N ACP instances use:
-# CMD ["uvicorn", "gateway.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--workers", "8"]
-CMD ["python", "-m", "gateway.main"]
+CMD ["acpbox"]

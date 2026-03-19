@@ -1,8 +1,8 @@
-"""Unit tests for gateway.session_store."""
+"""Unit tests for acpbox.session_store."""
 
 import pytest
 
-from gateway import session_store
+from acpbox import session_store
 
 
 def test_chat_id_or_new_returns_given():
