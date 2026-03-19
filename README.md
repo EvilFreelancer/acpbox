@@ -4,7 +4,7 @@ OpenAI-compatible HTTP API that acts as a **gateway to the Agent Client Protocol
 
 ## Problem
 
-Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`) speak the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout. This gateway provides a single HTTP entry point: one base URL, OpenAI-shaped API, with one ACP binary instance per uvicorn worker.
+Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`, or **Cursor Agent** via `agent acp`) speak the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout. This gateway provides a single HTTP entry point: one base URL, OpenAI-shaped API, with one ACP binary instance per uvicorn worker.
 
 ## How it works
 
@@ -41,6 +41,15 @@ sequenceDiagram
 1. **Config** – Copy `config.example.yaml` to `config.yaml` and adjust. Every option can also be set via environment (see `.env.example`).
 
 2. **Env** – Copy `.env.example` to `.env` and set values. All options (`CONFIG_PATH`, `ACP_*`, `GATEWAY_*`) can be configured via env.
+
+   **Agent command (OpenCode vs Cursor)** – set `acp.command` in `config.yaml` or `ACP_COMMAND` as a JSON array of strings.
+
+   | Backend | `config.yaml` | Shell (env) |
+   |---------|---------------|-------------|
+   | OpenCode | `command: ["opencode", "acp"]` | `export ACP_COMMAND='["opencode","acp"]'` |
+   | Cursor Agent | `command: ["agent", "acp"]` | `export ACP_COMMAND='["agent","acp"]'` |
+
+   Use an absolute path if the binary is not on `PATH` (e.g. `["/home/you/.local/bin/agent","acp"]`). Cursor Agent must be installed and logged in (`agent login`) so the subprocess can reach your account.
 
 3. **Run** – From the repo root. The app uses **uvicorn** (listed in `requirements.txt`). Default is a single worker (one ACP instance). For production, run uvicorn with `--workers N` to get N ACP agent processes (one per worker):
 
