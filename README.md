@@ -38,6 +38,47 @@ sequenceDiagram
 
 ## Quick setup
 
+### Install
+
+The package is on [PyPI](https://pypi.org/project/acpbox/). That installs the **`acpbox`** CLI (uvicorn-driven server, see `pyproject.toml`).
+
+**pipx** - isolated install, good for a long-lived CLI. You still need a **`config.yaml`** (copy [`config.example.yaml`](config.example.yaml) from this repo, or from [GitHub](https://github.com/EvilFreelancer/acpbox/blob/main/config.example.yaml)).
+
+```bash
+pipx install acpbox
+acpbox --config ./config.yaml
+```
+
+Upgrade later with `pipx upgrade acpbox`. Try once without installing globally:
+
+```bash
+acpbox --config ./config.yaml
+```
+
+**pip**
+
+```bash
+pip install acpbox
+acpbox --config ./config.yaml
+```
+
+**Git clone** - develop or pin to a revision.
+
+```bash
+git clone https://github.com/EvilFreelancer/acpbox
+cd acpbox
+cp config.example.yaml config.yaml
+# edit config.yaml
+pip install -e .
+acpbox --config ./config.yaml
+```
+
+From a checkout without the console script, after `pip install -r requirements.txt`:
+
+```bash
+python -m acpbox.main --config ./config.yaml
+```
+
 1. **Config** – Copy `config.example.yaml` to `config.yaml` and adjust. Every option can also be set via environment (see `.env.example`).
 
 2. **Env** – Copy `.env.example` to `.env` and set values. All options (`CONFIG_PATH`, `ACP_*`, `GATEWAY_*`) can be configured via env.
@@ -51,15 +92,7 @@ sequenceDiagram
 
    Use an absolute path if the binary is not on `PATH` (e.g. `["/home/you/.local/bin/agent","acp"]`). Cursor Agent must be installed and logged in (`agent login`) so the subprocess can reach your account.
 
-3. **Run** – Install the package (adds the **`acpbox`** CLI). The process manager is **uvicorn** (see `pyproject.toml`). Use **`gateway.workers`** in YAML or **`GATEWAY_WORKERS`** in the environment for process count (one ACP subprocess per worker). **`GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your installed uvicorn exposes a matching `threads=` argument (current releases usually do not; ASGI uses **asyncio** per process).
-
-```bash
-pip install .
-CONFIG_PATH=config.yaml acpbox
-# Or from a checkout without installing the script:
-pip install -r requirements.txt
-CONFIG_PATH=config.yaml python -m acpbox.main
-```
+3. **Run** – Start **`acpbox`** with **`CONFIG_PATH`** (and other env vars) as needed. Use **`gateway.workers`** in YAML or **`GATEWAY_WORKERS`** for worker count (one ACP subprocess per worker). **`GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your uvicorn supports a `threads=` argument (many builds do not; ASGI uses **asyncio** per process).
 
 Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` for the image build (comma-separated `opencode`, `cursor`); the compose file passes it as a build-arg. After changing `AGENTS`, run `docker compose build --no-cache acpbox` so installers run again. Runtime **`ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`GATEWAY_WORKERS`** and **`GATEWAY_THREADS`** passed through the environment.
 
