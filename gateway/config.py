@@ -41,7 +41,10 @@ class AcpConfig(BaseSettings):
         description="Command to start the ACP agent (list of strings). Env: ACP_COMMAND as JSON array.",
     )
     env: dict[str, str] = Field(default_factory=dict, description="Extra env for ACP process. Env: ACP_ENV as JSON object.")
-    cwd: str | None = Field(default=None, description="Working directory for session/new. Env: ACP_CWD. If unset, current process cwd.")
+    workspace: str = Field(
+        default="./workspace",
+        description="Directory passed as cwd to ACP session/new (resolved to absolute). Env: ACP_WORKSPACE.",
+    )
 
     @field_validator("command", mode="before")
     @classmethod

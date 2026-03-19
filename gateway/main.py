@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     runner = AcpRunner(
         command=config.acp.command,
         env=config.acp.env,
-        cwd=config.acp.cwd,
+        workspace=config.acp.workspace,
     )
     try:
         await runner.start()

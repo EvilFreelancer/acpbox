@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Sequence
 
 from acp.schema import TextContentBlock
@@ -34,6 +35,11 @@ async def _read_message(stream: asyncio.StreamReader) -> dict[str, Any] | None:
     if not line:
         return None
     return json.loads(line.decode("utf-8").strip())
+
+
+def _resolved_workspace_dir(workspace: str) -> str:
+    """Absolute path for ACP session/new cwd."""
+    return str(Path(workspace).expanduser().resolve())
 
 
 def _serialize_prompt_blocks(blocks: Sequence[TextContentBlock | dict[str, Any]]) -> list[dict[str, Any]]:
@@ -91,11 +97,11 @@ class AcpRunner:
         self,
         command: list[str],
         env: dict[str, str],
-        cwd: str | None,
+        workspace: str,
     ) -> None:
         self._command = command
         self._env = dict(os.environ) | env
-        self._cwd = cwd or os.getcwd()
+        self._workspace_dir = _resolved_workspace_dir(workspace)
         self._proc: asyncio.subprocess.Process | None = None
         self._stdin_writer: asyncio.StreamWriter | None = None
         self._stdout_reader: asyncio.StreamReader | None = None
@@ -114,7 +120,7 @@ class AcpRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._env,
-            cwd=self._cwd,
+            cwd=self._workspace_dir,
         )
         assert self._proc.stdin and self._proc.stdout
         self._stdin_writer = self._proc.stdin
@@ -155,7 +161,7 @@ class AcpRunner:
             self._stdout_reader,
             self._next_id,
             "session/new",
-            {"cwd": self._cwd, "mcpServers": []},
+            {"cwd": self._workspace_dir, "mcpServers": []},
             timeout=30.0,
         )
         self._next_id += 1
@@ -197,7 +203,7 @@ class AcpRunner:
             self._stdout_reader,
             self._next_id,
             "session/new",
-            {"cwd": self._cwd, "mcpServers": []},
+            {"cwd": self._workspace_dir, "mcpServers": []},
             timeout=request_timeout,
         )
         self._next_id += 1
@@ -279,7 +285,7 @@ class AcpRunner:
 async def get_agent_models(
     command: list[str],
     env: dict[str, str],
-    cwd: str | None,
+    workspace: str,
     *,
     timeout: float = 30.0,
 ) -> list[str]:
@@ -288,7 +294,7 @@ async def get_agent_models(
     Used when no per-worker runner exists (e.g. tests with mock runner).
     """
     env_full = dict(os.environ) | env
-    work_dir = cwd or os.getcwd()
+    work_dir = _resolved_workspace_dir(workspace)
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE,
@@ -343,7 +349,7 @@ async def get_agent_models(
 async def run_single_turn(
     command: list[str],
     env: dict[str, str],
-    cwd: str | None,
+    workspace: str,
     prompt_blocks: list[dict[str, Any]],
     *,
     mode_id: str | None = None,
@@ -352,7 +358,7 @@ async def run_single_turn(
     """
     Spawn ACP agent, run one turn, then terminate. Used when no per-worker runner exists.
     """
-    runner = AcpRunner(command, env, cwd)
+    runner = AcpRunner(command, env, workspace)
     await runner.start()
     try:
         return await runner.run_turn(prompt_blocks, mode_id, request_timeout)

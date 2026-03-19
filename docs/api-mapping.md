@@ -15,7 +15,7 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 | OpenAI | ACP (stdio) | Notes |
 |--------|-------------|--------|
-| `POST /v1/chat/completions` | Spawn agent -> `initialize` -> `session/new` -> `session/prompt` | One process per request. `messages` -> ACP prompt content blocks (single text block with conversation). Reply from `session/update` agent_message_chunk -> assistant `content`. |
+| `POST /v1/chat/completions` | Per-worker agent -> `initialize` -> `session/new` -> `session/prompt` | `session/new` **`cwd`** comes from **`ACP_WORKSPACE`** / `acp.workspace` (default `./workspace`, Docker `/workspace`). `messages` -> ACP prompt content blocks. Reply from `session/update` agent_message_chunk -> assistant `content`. |
 
 **Request mapping (messages -> ACP prompt):**
 
@@ -30,7 +30,7 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 | OpenAI | ACP (stdio) | Notes |
 |--------|-------------|--------|
-| `POST /v1/responses` | Same as chat: one process per request | Optional `chat_id` is stored and returned for client continuity; the agent process is still new each time (no in-agent session persistence). |
+| `POST /v1/responses` | Same as chat (same workspace `cwd` for `session/new`) | Optional `chat_id` is stored and returned for client continuity; each HTTP request still opens a new ACP session on the same process. |
 | `DELETE /v1/responses/{response_id}` | Gateway only | Removes response from session store; returns `{ id, object: "response", deleted: true }`. |
 | `GET /v1/responses/{response_id}` | - | Not implemented (501). |
 | `DELETE /v1/sessions/{chat_id}` | Gateway only | Extension: deletes all response_ids for that session. |

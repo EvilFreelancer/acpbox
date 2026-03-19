@@ -7,7 +7,7 @@ acp:
     - opencode
     - acp
   env: {}
-  cwd: null
+  workspace: "./workspace"
 
 gateway:
   host: "0.0.0.0"

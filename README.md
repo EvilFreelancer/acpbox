@@ -8,7 +8,7 @@ Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](http
 
 ## How it works
 
-1. **Config** – YAML and env define the agent command, env vars, and working directory for sessions.
+1. **Config** – YAML and env define the agent command, env vars, and **workspace** (`ACP_WORKSPACE`, default `./workspace`; Docker `/workspace`) passed as ACP `session/new` `cwd`.
 2. **One ACP process per worker** – The app runs under **uvicorn**. In lifespan each worker starts **one** ACP agent subprocess and keeps it for the worker's lifetime. With 8 workers you get 8 ACP binary instances. ACP uses **stdio** only (JSON-RPC, newline-delimited).
 3. **Reuse per request** – Each request in that worker uses the same process: `session/new` -> optional `session/set_mode` -> `session/prompt`, then the response is returned. The process is not terminated after each request.
 4. **Translation** – OpenAI requests are converted to ACP JSON-RPC; ACP content (e.g. `session/update` agent_message_chunk) is converted back to OpenAI chat/responses format.
@@ -60,7 +60,7 @@ CONFIG_PATH=config.yaml python -m gateway.main
 # uvicorn gateway.main:create_app --factory --host 0.0.0.0 --port 8080 --workers 8
 ```
 
-Or with Docker Compose (reads `.env` and runs the `gateway` service). The Dockerfile runs the app via `python -m gateway.main`, which starts uvicorn with one worker by default; override the command to use more workers if needed.
+Or with Docker Compose (reads `.env` and runs the `gateway` service). Set **`AGENTS`** in `.env` for the image build (comma-separated `opencode`, `cursor`); the compose file passes it as a build-arg. After changing `AGENTS`, run `docker compose build --no-cache gateway` so installers run again. Runtime **`ACP_COMMAND`** must match the installed binary (see Agent command table above). The Dockerfile runs the app via `python -m gateway.main`, which starts uvicorn with one worker by default; override the command to use more workers if needed.
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 

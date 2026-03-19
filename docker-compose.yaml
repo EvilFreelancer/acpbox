@@ -1,8 +1,16 @@
+x-shared-logs: &shared-logs
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "100k"
+
 services:
   gateway:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        AGENTS: ${AGENTS:-}
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     env_file:
@@ -11,7 +19,14 @@ services:
       - CONFIG_PATH=${CONFIG_PATH:-/app/config.yaml}
       - ACP_COMMAND=${ACP_COMMAND:-}
       - ACP_ENV=${ACP_ENV:-}
+      - ACP_WORKSPACE=/workspace
       - ACP_STARTUP_TIMEOUT_SECONDS=${ACP_STARTUP_TIMEOUT_SECONDS:-30}
       - GATEWAY_HOST=${GATEWAY_HOST:-0.0.0.0}
       - GATEWAY_PORT=${GATEWAY_PORT:-8080}
       - GATEWAY_ACP_BASE_URL=${GATEWAY_ACP_BASE_URL:-http://127.0.0.1:8000}
+      # Agent API keys
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./workspace:/workspace
+    <<: *shared-logs
