@@ -6,29 +6,29 @@ x-shared-logs: &shared-logs
 
 services:
   acpbox:
+    #image: evilfreelancer/acpbox:latest
+    #pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
       args:
         AGENTS: ${AGENTS:-}
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
-    env_file:
-      - .env
+      - "${ACPBOX_GATEWAY_PORT:-8080}:8080"
     environment:
-      - CONFIG_PATH=${CONFIG_PATH:-/app/config.yaml}
-      - ACP_COMMAND=${ACP_COMMAND:-}
-      - ACP_ENV=${ACP_ENV:-}
-      - ACP_WORKSPACE=/workspace
-      - ACP_STARTUP_TIMEOUT_SECONDS=${ACP_STARTUP_TIMEOUT_SECONDS:-30}
-      - GATEWAY_HOST=${GATEWAY_HOST:-0.0.0.0}
-      - GATEWAY_PORT=${GATEWAY_PORT:-8080}
-      - GATEWAY_WORKERS=${GATEWAY_WORKERS:-1}
-      - GATEWAY_THREADS=${GATEWAY_THREADS:-1}
-      - GATEWAY_ACP_BASE_URL=${GATEWAY_ACP_BASE_URL:-http://127.0.0.1:8000}
+      - ACPBOX_CONFIG_PATH=${ACPBOX_CONFIG_PATH:-}
+      - ACPBOX_ACP_COMMAND=${ACPBOX_ACP_COMMAND:-}
+      - ACPBOX_ACP_ENV=${ACPBOX_ACP_ENV:-}
+      - ACPBOX_ACP_WORKSPACE=/workspace
+      - ACPBOX_GATEWAY_HOST=${ACPBOX_GATEWAY_HOST:-0.0.0.0}
+      - ACPBOX_GATEWAY_PORT=${ACPBOX_GATEWAY_PORT:-8080}
+      - ACPBOX_GATEWAY_WORKERS=${ACPBOX_GATEWAY_WORKERS:-1}
+      - ACPBOX_GATEWAY_THREADS=${ACPBOX_GATEWAY_THREADS:-1}
       # Agent API keys
       - CURSOR_API_KEY=${CURSOR_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
     volumes:
       - ./workspace:/workspace
     <<: *shared-logs

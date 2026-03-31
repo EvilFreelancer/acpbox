@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Comma-separated, case-insensitive: opencode, cursor. Pass at build time (e.g. docker compose build.args from .env).
+# Comma-separated, case-insensitive: opencode, cursor, claude, codex. Pass at build time (e.g. docker compose build.args from .env).
 ARG AGENTS=
 
 RUN groupadd --gid 1000 user \
@@ -17,10 +17,14 @@ RUN set -eux; \
     agents=",${agents},"; \
     install_opencode=0; \
     install_cursor=0; \
+    install_claude=0; \
+    install_codex=0; \
     case "${agents}" in (*,opencode,*) install_opencode=1 ;; esac; \
     case "${agents}" in (*,cursor,*) install_cursor=1 ;; esac; \
-    if [ "${install_opencode}" = "0" ] && [ "${install_cursor}" = "0" ]; then \
-      echo "AGENTS build-arg empty or without opencode|cursor; image contains acpbox only. Install an ACP agent in a derived image or mount a binary."; \
+    case "${agents}" in (*,claude,*) install_claude=1 ;; esac; \
+    case "${agents}" in (*,codex,*) install_codex=1 ;; esac; \
+    if [ "${install_opencode}" = "0" ] && [ "${install_cursor}" = "0" ] && [ "${install_claude}" = "0" ] && [ "${install_codex}" = "0" ]; then \
+      echo "AGENTS build-arg empty or without opencode|cursor|claude|codex; image contains acpbox only. Install an ACP agent in a derived image or mount a binary."; \
     else \
       apt-get update; \
       apt-get install -y --no-install-recommends curl ca-certificates bash; \
@@ -32,6 +36,18 @@ RUN set -eux; \
         su user -s /bin/bash -c 'curl -fsSL https://cursor.com/install | bash'; \
         su user -s /bin/bash -c 'command -v agent'; \
       fi; \
+      if [ "${install_claude}" = "1" ] || [ "${install_codex}" = "1" ]; then \
+        apt-get install -y --no-install-recommends nodejs npm; \
+      fi; \
+      if [ "${install_claude}" = "1" ]; then \
+        npm install -g @agentclientprotocol/claude-agent-acp; \
+        command -v claude-agent-acp; \
+      fi; \
+      if [ "${install_codex}" = "1" ]; then \
+        npm install -g @openai/codex @zed-industries/codex-acp; \
+        command -v codex; \
+        command -v codex-acp; \
+      fi; \
       apt-get purge -y curl; \
       apt-get autoremove -y; \
       rm -rf /var/lib/apt/lists/*; \
@@ -42,9 +58,6 @@ RUN pip install --no-cache-dir . \
  && chown -R user:user /app \
  && mkdir -p /workspace \
  && chown user:user /workspace
-
-ENV ACP_WORKSPACE=/workspace
-ENV CONFIG_PATH=/app/config.yaml
 
 EXPOSE 8080
 

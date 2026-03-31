@@ -14,7 +14,7 @@ For each `POST /v1/chat/completions` or `POST /v1/responses` in that worker:
 
 1. **Lock** – The runner uses an asyncio lock so only one request at a time uses the process (stdio is single-stream).
 2. **Initialize** – If not yet done, send JSON-RPC `initialize`; wait for result.
-3. **Session** – Send `session/new` with `cwd` set to the configured **workspace** (`acp.workspace` / **`ACP_WORKSPACE`**, default `./workspace`, Docker `/workspace`) and empty `mcpServers`; receive `sessionId`.
+3. **Session** – Send `session/new` with `cwd` set to the configured **workspace** (`acp.workspace` / **`ACPBOX_ACP_WORKSPACE`**, default `./workspace`, Docker `/workspace`) and empty `mcpServers`; receive `sessionId`.
 4. **Mode** – If the request has a `model` (mode id), send `session/set_mode` with that `modeId`.
 5. **Prompt** – Send `session/prompt` with `sessionId` and prompt content blocks (from OpenAI messages). Read messages from stdout until the `session/prompt` response:
    - On `session/update` with `agent_message_chunk`: append text to the aggregated reply.
