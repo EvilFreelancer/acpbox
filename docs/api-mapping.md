@@ -15,7 +15,7 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 | OpenAI | ACP (stdio) | Notes |
 |--------|-------------|--------|
-| `POST /v1/chat/completions` | Per-worker agent -> `initialize` -> `session/new` -> `session/prompt` | `session/new` **`cwd`** comes from **`ACP_WORKSPACE`** / `acp.workspace` (default `./workspace`, Docker `/workspace`). `messages` -> ACP prompt content blocks. Reply from `session/update` agent_message_chunk -> assistant `content`. |
+| `POST /v1/chat/completions` | Per-worker agent -> `initialize` -> `session/new` -> `session/prompt` | `session/new` **`cwd`** comes from **`ACPBOX_ACP_WORKSPACE`** / `acp.workspace` (default `./workspace`, Docker `/workspace`). `messages` -> ACP prompt content blocks. Reply from `session/update` agent_message_chunk -> assistant `content`. |
 
 **Request mapping (messages -> ACP prompt):**
 

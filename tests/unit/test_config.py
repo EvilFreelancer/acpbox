@@ -15,9 +15,9 @@ def test_load_yaml_config_missing_file():
 
 def test_config_load_defaults(monkeypatch):
     """Config.load() with no file uses defaults from env/pydantic."""
-    monkeypatch.delenv("CONFIG_PATH", raising=False)
-    monkeypatch.delenv("GATEWAY_WORKERS", raising=False)
-    monkeypatch.delenv("GATEWAY_THREADS", raising=False)
+    monkeypatch.delenv("ACPBOX_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("ACPBOX_GATEWAY_WORKERS", raising=False)
+    monkeypatch.delenv("ACPBOX_GATEWAY_THREADS", raising=False)
     config = Config.load()
     assert config.gateway.port == 8080
     assert config.gateway.host == "0.0.0.0"
@@ -29,17 +29,17 @@ def test_config_load_defaults(monkeypatch):
 
 def test_gateway_workers_from_env(monkeypatch):
     """GATEWAY_WORKERS overrides defaults."""
-    monkeypatch.delenv("CONFIG_PATH", raising=False)
-    monkeypatch.delenv("GATEWAY_THREADS", raising=False)
-    monkeypatch.setenv("GATEWAY_WORKERS", "4")
+    monkeypatch.delenv("ACPBOX_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("ACPBOX_GATEWAY_THREADS", raising=False)
+    monkeypatch.setenv("ACPBOX_GATEWAY_WORKERS", "4")
     config = Config.load()
     assert config.gateway.workers == 4
 
 
 def test_gateway_threads_from_env(monkeypatch):
     """GATEWAY_THREADS overrides defaults."""
-    monkeypatch.delenv("CONFIG_PATH", raising=False)
-    monkeypatch.delenv("GATEWAY_WORKERS", raising=False)
-    monkeypatch.setenv("GATEWAY_THREADS", "8")
+    monkeypatch.delenv("ACPBOX_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("ACPBOX_GATEWAY_WORKERS", raising=False)
+    monkeypatch.setenv("ACPBOX_GATEWAY_THREADS", "8")
     config = Config.load()
     assert config.gateway.threads == 8

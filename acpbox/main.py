@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
-    """Create FastAPI application and load config from CONFIG_PATH or config_path."""
+    """Create FastAPI application and load config from ACPBOX_CONFIG_PATH or config_path."""
     config = Config.load(config_path)
     app = FastAPI(
         title="ACP OpenAI API Gateway",
@@ -84,7 +84,7 @@ def _uvicorn_extra_kwargs(config: Config) -> dict[str, Any]:
 def run(config_path: str | None = None) -> None:
     """Load config and run uvicorn. Used by __main__, acpbox CLI, and Docker."""
     if config_path is not None:
-        os.environ["CONFIG_PATH"] = str(Path(config_path).resolve())
+        os.environ["ACPBOX_CONFIG_PATH"] = str(Path(config_path).resolve())
 
     config = Config.load(None)
     import uvicorn
@@ -92,7 +92,7 @@ def run(config_path: str | None = None) -> None:
     extra = _uvicorn_extra_kwargs(config)
     if config.gateway.threads != 1 and "threads" not in extra:
         logger.warning(
-            "GATEWAY_THREADS=%s is ignored: this uvicorn has no threads= argument (ASGI uses asyncio).",
+            "ACPBOX_GATEWAY_THREADS=%s is ignored: this uvicorn has no threads= argument (ASGI uses asyncio).",
             config.gateway.threads,
         )
 

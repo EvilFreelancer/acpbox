@@ -1,12 +1,12 @@
 """Configuration loaded from YAML file and environment variables."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, Field
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -31,61 +31,45 @@ def _parse_dict_from_env(v: dict[str, str] | str) -> dict[str, str]:
     return v
 
 
-class AcpConfig(BaseSettings):
-    """ACP agent process settings (stdio, one process per request). All fields overridable via ACP_* env."""
-
-    model_config = SettingsConfigDict(env_prefix="ACP_", extra="ignore")
+class AcpConfig(BaseModel):
+    """ACP agent process settings (stdio). Overridable via ACPBOX_ACP_* env."""
 
     command: list[str] = Field(
         default_factory=lambda: ["opencode", "acp"],
-        description="Command to start the ACP agent (list of strings). Env: ACP_COMMAND as JSON array.",
+        description="Command to start the ACP agent (list of strings). Env: ACPBOX_ACP_COMMAND as JSON array.",
     )
-    env: dict[str, str] = Field(default_factory=dict, description="Extra env for ACP process. Env: ACP_ENV as JSON object.")
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra env for ACP process. Env: ACPBOX_ACP_ENV as JSON object.",
+    )
     workspace: str = Field(
         default="./workspace",
-        description="Directory passed as cwd to ACP session/new (resolved to absolute). Env: ACP_WORKSPACE.",
+        description="Directory passed as cwd to ACP session/new (resolved to absolute). Env: ACPBOX_ACP_WORKSPACE.",
     )
 
-    @field_validator("command", mode="before")
-    @classmethod
-    def command_from_env(cls, v: Any) -> list[str]:
-        return _parse_list_from_env(v) if isinstance(v, (list, str)) else v
 
-    @field_validator("env", mode="before")
-    @classmethod
-    def env_from_env(cls, v: Any) -> dict[str, str]:
-        return _parse_dict_from_env(v) if isinstance(v, (dict, str)) else v or {}
+class GatewayConfig(BaseModel):
+    """Gateway HTTP server settings. Overridable via ACPBOX_GATEWAY_* env."""
 
-
-class GatewayConfig(BaseSettings):
-    """Gateway HTTP server settings. All fields overridable via GATEWAY_* env."""
-
-    model_config = SettingsConfigDict(env_prefix="GATEWAY_", extra="ignore")
-
-    host: str = Field(default="0.0.0.0", description="Host to bind. Env: GATEWAY_HOST.")
-    port: int = Field(default=8080, ge=1, le=65535, description="Port for the gateway. Env: GATEWAY_PORT.")
+    host: str = Field(default="0.0.0.0", description="Host to bind. Env: ACPBOX_GATEWAY_HOST.")
+    port: int = Field(default=8080, ge=1, le=65535, description="Port for the gateway. Env: ACPBOX_GATEWAY_PORT.")
     workers: int = Field(
         default=1,
         ge=1,
-        description="Uvicorn worker processes (one ACP subprocess per worker). Env: GATEWAY_WORKERS.",
+        description="Uvicorn worker processes (one ACP subprocess per worker). Env: ACPBOX_GATEWAY_WORKERS.",
     )
     threads: int = Field(
         default=1,
         ge=1,
         description=(
             "Forwarded to uvicorn.run only if that release defines a matching parameter "
-            "(today ASGI uvicorn uses asyncio, not an OS thread pool). Env: GATEWAY_THREADS."
+            "(today ASGI uvicorn uses asyncio, not an OS thread pool). Env: ACPBOX_GATEWAY_THREADS."
         ),
     )
 
 
-class Config(BaseSettings):
+class Config(BaseModel):
     """Root configuration: ACP + Gateway, with optional YAML file and env overrides."""
-
-    model_config = SettingsConfigDict(
-        env_nested_delimiter="__",
-        extra="ignore",
-    )
 
     acp: AcpConfig = Field(default_factory=AcpConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
@@ -94,19 +78,55 @@ class Config(BaseSettings):
     def load(cls, config_path: str | Path | None = None) -> "Config":
         """
         Load config from optional YAML file and environment.
-        Env vars take precedence over YAML. CONFIG_PATH can override path.
+        Env vars take precedence over YAML.
         """
-        path_str = config_path
-        if path_str is None:
-            from os import environ
-            path_str = environ.get("CONFIG_PATH")
+        path_str: str | None
+        if config_path is not None:
+            path_str = str(config_path)
+        else:
+            path_str = os.environ.get("ACPBOX_CONFIG_PATH") or os.environ.get("CONFIG_PATH")
+
         path = Path(path_str).resolve() if path_str else None
         yaml_data = load_yaml_config(path) if path else {}
 
-        acp_data = yaml_data.get("acp", {})
-        gateway_data = yaml_data.get("gateway", {})
+        acp_data: dict[str, Any] = dict(yaml_data.get("acp", {}) or {})
+        gateway_data: dict[str, Any] = dict(yaml_data.get("gateway", {}) or {})
 
-        return cls(
-            acp=AcpConfig(**acp_data),
-            gateway=GatewayConfig(**gateway_data),
-        )
+        def _env_get(*names: str) -> str | None:
+            for n in names:
+                if n in os.environ:
+                    return os.environ.get(n)
+            return None
+
+        # ACP overrides
+        acp_command_raw = _env_get("ACPBOX_ACP_COMMAND", "ACP_COMMAND")
+        if acp_command_raw is not None:
+            if acp_command_raw.strip():
+                acp_data["command"] = _parse_list_from_env(acp_command_raw)
+
+        acp_env_raw = _env_get("ACPBOX_ACP_ENV", "ACP_ENV")
+        if acp_env_raw is not None:
+            acp_data["env"] = _parse_dict_from_env(acp_env_raw)
+
+        acp_workspace_raw = _env_get("ACPBOX_ACP_WORKSPACE", "ACP_WORKSPACE")
+        if acp_workspace_raw is not None:
+            acp_data["workspace"] = acp_workspace_raw
+
+        # Gateway overrides
+        gateway_host_raw = _env_get("ACPBOX_GATEWAY_HOST", "GATEWAY_HOST")
+        if gateway_host_raw is not None:
+            gateway_data["host"] = gateway_host_raw
+
+        gateway_port_raw = _env_get("ACPBOX_GATEWAY_PORT", "GATEWAY_PORT")
+        if gateway_port_raw is not None and gateway_port_raw.strip():
+            gateway_data["port"] = int(gateway_port_raw)
+
+        gateway_workers_raw = _env_get("ACPBOX_GATEWAY_WORKERS", "GATEWAY_WORKERS")
+        if gateway_workers_raw is not None and gateway_workers_raw.strip():
+            gateway_data["workers"] = int(gateway_workers_raw)
+
+        gateway_threads_raw = _env_get("ACPBOX_GATEWAY_THREADS", "GATEWAY_THREADS")
+        if gateway_threads_raw is not None and gateway_threads_raw.strip():
+            gateway_data["threads"] = int(gateway_threads_raw)
+
+        return cls(acp=AcpConfig(**acp_data), gateway=GatewayConfig(**gateway_data))

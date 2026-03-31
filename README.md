@@ -8,7 +8,7 @@ Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](http
 
 ## How it works
 
-1. **Config** – YAML and env define the agent command, env vars, and **workspace** (`ACP_WORKSPACE`, default `./workspace`; Docker `/workspace`) passed as ACP `session/new` `cwd`.
+1. **Config** – YAML and env define the agent command, env vars, and **workspace** (`ACPBOX_ACP_WORKSPACE`, default `./workspace`; Docker `/workspace`) passed as ACP `session/new` `cwd`.
 2. **One ACP process per worker** – The app runs under **uvicorn**. In lifespan each worker starts **one** ACP agent subprocess and keeps it for the worker's lifetime. With 8 workers you get 8 ACP binary instances. ACP uses **stdio** only (JSON-RPC, newline-delimited).
 3. **Reuse per request** – Each request in that worker uses the same process: `session/new` -> optional `session/set_mode` -> `session/prompt`, then the response is returned. The process is not terminated after each request.
 4. **Translation** – OpenAI requests are converted to ACP JSON-RPC; ACP content (e.g. `session/update` agent_message_chunk) is converted back to OpenAI chat/responses format.
@@ -81,20 +81,22 @@ python -m acpbox.main --config ./config.yaml
 
 1. **Config** – Copy `config.example.yaml` to `config.yaml` and adjust. Every option can also be set via environment (see `.env.example`).
 
-2. **Env** – Copy `.env.example` to `.env` and set values. All options (`CONFIG_PATH`, `ACP_*`, `GATEWAY_*`) can be configured via env.
+2. **Env** – Copy `.env.example` to `.env` and set values. All options (`ACPBOX_CONFIG_PATH`, `ACPBOX_ACP_*`, `ACPBOX_GATEWAY_*`) can be configured via env.
 
-   **Agent command (OpenCode vs Cursor)** – set `acp.command` in `config.yaml` or `ACP_COMMAND` as a JSON array of strings.
+   **Agent command (OpenCode vs Cursor)** – set `acp.command` in `config.yaml` or `ACPBOX_ACP_COMMAND` as a JSON array of strings.
 
    | Backend | `config.yaml` | Shell (env) |
    |---------|---------------|-------------|
-   | OpenCode | `command: ["opencode", "acp"]` | `export ACP_COMMAND='["opencode","acp"]'` |
-   | Cursor Agent | `command: ["agent", "acp"]` | `export ACP_COMMAND='["agent","acp"]'` |
+   | OpenCode | `command: ["opencode", "acp"]` | `export ACPBOX_ACP_COMMAND='["opencode","acp"]'` |
+   | Cursor Agent | `command: ["agent", "acp"]` | `export ACPBOX_ACP_COMMAND='["agent","acp"]'` |
+   | Claude (ACP adapter) | `command: ["claude-agent-acp"]` | `export ACPBOX_ACP_COMMAND='["claude-agent-acp"]'` |
+   | Codex (ACP adapter) | `command: ["codex-acp"]` | `export ACPBOX_ACP_COMMAND='["codex-acp"]'` |
 
    Use an absolute path if the binary is not on `PATH` (e.g. `["/home/you/.local/bin/agent","acp"]`). Cursor Agent must be installed and logged in (`agent login`) so the subprocess can reach your account.
 
-3. **Run** – Start **`acpbox`** with **`CONFIG_PATH`** (and other env vars) as needed. Use **`gateway.workers`** in YAML or **`GATEWAY_WORKERS`** for worker count (one ACP subprocess per worker). **`GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your uvicorn supports a `threads=` argument (many builds do not; ASGI uses **asyncio** per process).
+3. **Run** – Start **`acpbox`** with **`ACPBOX_CONFIG_PATH`** (and other env vars) as needed. Use **`gateway.workers`** in YAML or **`ACPBOX_GATEWAY_WORKERS`** for worker count (one ACP subprocess per worker). **`ACPBOX_GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your uvicorn supports a `threads=` argument (many builds do not; ASGI uses **asyncio** per process).
 
-Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` for the image build (comma-separated `opencode`, `cursor`); the compose file passes it as a build-arg. After changing `AGENTS`, run `docker compose build --no-cache acpbox` so installers run again. Runtime **`ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`GATEWAY_WORKERS`** and **`GATEWAY_THREADS`** passed through the environment.
+Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` to install missing agent binaries at container startup (comma-separated `opencode`, `cursor`, `claude`, `codex`). Runtime **`ACPBOX_ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`ACPBOX_GATEWAY_WORKERS`** and **`ACPBOX_GATEWAY_THREADS`** passed through the environment.
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 
@@ -111,7 +113,7 @@ pytest tests/ -v
 
 ## Adding your own ACP in Docker
 
-Build an image that includes **acpbox** and your ACP agent binary (e.g. `opencode acp`). Set `acp.command` and `acp.env` in config or `.env`. The server runs with **uvicorn** via **`acpbox`**; each worker starts one ACP process in lifespan. To run 8 ACP instances, set **`GATEWAY_WORKERS=8`** (or **`gateway.workers`** in YAML). See [docs/deployment.md](docs/deployment.md).
+Build an image that includes **acpbox** and your ACP agent binary (e.g. `opencode acp`). Set `acp.command` and `acp.env` in config or `.env`. The server runs with **uvicorn** via **`acpbox`**; each worker starts one ACP process in lifespan. To run 8 ACP instances, set **`ACPBOX_GATEWAY_WORKERS=8`** (or **`gateway.workers`** in YAML). See [docs/deployment.md](docs/deployment.md).
 
 ## Specifications
 

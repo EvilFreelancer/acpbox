@@ -24,7 +24,7 @@ gateway:
 |-------|------|---------|-------------|
 | `command` | list of strings | `["opencode", "acp"]` | Command to start the ACP agent (subprocess argv). Used for every request (including `GET /v1/models`); communication is over stdio. |
 | `env` | map string -> string | `{}` | Extra environment variables for the ACP process. Merged over current env. |
-| `workspace` | string | `./workspace` | Project directory for ACP `session/new` as `cwd` (resolved to absolute). Override with **`ACP_WORKSPACE`**. Docker default `/workspace` (see Dockerfile). |
+| `workspace` | string | `./workspace` | Project directory for ACP `session/new` as `cwd` (resolved to absolute). Override with **`ACPBOX_ACP_WORKSPACE`**. Docker default `/workspace` (see Dockerfile). |
 
 **Models:** The list of "models" in `GET /v1/models` is **not** configured here. The gateway gets it from the agent: it spawns the agent, calls `initialize` and `session/new`, and uses `modes.availableModes[].id` (e.g. OpenCode returns `plan`, `build`) as the model list.
 
@@ -41,30 +41,30 @@ gateway:
 
 | Env var | Section | Description |
 |---------|---------|-------------|
-| `CONFIG_PATH` | - | Path to YAML config. If unset, no file is loaded. |
-| `ACP_COMMAND` | acp | JSON array of strings, e.g. `["opencode", "acp"]`. |
-| `ACP_ENV` | acp | JSON object for extra env. |
-| `ACP_WORKSPACE` | acp | Project directory for ACP `session/new` cwd. Default `./workspace`; Docker image sets `/workspace`. |
-| `GATEWAY_HOST` | gateway | Host to bind. |
-| `GATEWAY_PORT` | gateway | Port. |
-| `GATEWAY_WORKERS` | gateway | Uvicorn worker process count. |
-| `GATEWAY_THREADS` | gateway | Used only if **`uvicorn.run`** in your environment accepts **`threads`**. |
+| `ACPBOX_CONFIG_PATH` | - | Path to YAML config. If empty or unset, no file is loaded. |
+| `ACPBOX_ACP_COMMAND` | acp | JSON array of strings, e.g. `["opencode", "acp"]`. If empty or unset, the gateway starts without an agent. |
+| `ACPBOX_ACP_ENV` | acp | JSON object for extra env. |
+| `ACPBOX_ACP_WORKSPACE` | acp | Project directory for ACP `session/new` cwd. Default `./workspace`; Docker image and compose use `/workspace`. |
+| `ACPBOX_GATEWAY_HOST` | gateway | Host to bind. |
+| `ACPBOX_GATEWAY_PORT` | gateway | Port. |
+| `ACPBOX_GATEWAY_WORKERS` | gateway | Uvicorn worker process count. |
+| `ACPBOX_GATEWAY_THREADS` | gateway | Used only if **`uvicorn.run`** in your environment accepts **`threads`**. |
 
 ## Examples
 
 **Minimal (env only):**
 
 ```bash
-export ACP_COMMAND='["opencode","acp"]'
-export ACP_WORKSPACE=./workspace
-export GATEWAY_PORT=8080
+export ACPBOX_ACP_COMMAND='["opencode","acp"]'
+export ACPBOX_ACP_WORKSPACE=./workspace
+export ACPBOX_GATEWAY_PORT=8080
 acpbox
 ```
 
 **File + override:**
 
 ```bash
-CONFIG_PATH=config.yaml GATEWAY_PORT=9090 python -m acpbox.main
+ACPBOX_CONFIG_PATH=config.yaml ACPBOX_GATEWAY_PORT=9090 python -m acpbox.main
 ```
 
 **Docker Compose** (reads `.env`):
