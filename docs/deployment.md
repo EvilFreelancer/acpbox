@@ -8,28 +8,28 @@ Build from the repository root:
 docker build -t acpbox .
 ```
 
-Optional **build-arg** `AGENTS` installs ACP binaries into the image (comma-separated, case-insensitive)
+Optional env `AGENTS` installs ACP binaries at container startup (comma-separated, case-insensitive)
 
 - `opencode` - official install script from [opencode.ai/install](https://opencode.ai/install), binary under `/home/user/.opencode/bin`
 - `cursor` - official script from [cursor.com/install](https://cursor.com/install), `agent` under `/home/user/.local/bin`
 - `claude` - installs `claude-agent-acp` (ACP adapter for Claude Agent SDK) via npm package `@agentclientprotocol/claude-agent-acp` into `/usr/local/bin`
 - `codex` - installs `codex` (Codex CLI) via npm package `@openai/codex` and `codex-acp` (ACP adapter for Codex CLI) via npm package `@zed-industries/codex-acp` into `/usr/local/bin`
 
-The image runs **acpbox** as user **`user`** (UID 1000, GID 1000); agents install into that home directory (except global npm bins). Examples:
+The image runs **acpbox** as user **`user`** (UID 1000, GID 1000); agents install into that home directory. Examples:
 
 ```bash
-docker build -t acpbox --build-arg AGENTS=opencode .
-docker build -t acpbox --build-arg AGENTS=cursor .
-docker build -t acpbox --build-arg AGENTS=claude .
-docker build -t acpbox --build-arg AGENTS=codex .
-docker build -t acpbox --build-arg AGENTS=opencode,cursor .
-docker build -t acpbox --build-arg AGENTS=opencode,claude .
-docker build -t acpbox --build-arg AGENTS=opencode,codex .
+docker run --rm -e AGENTS=opencode acpbox
+docker run --rm -e AGENTS=cursor acpbox
+docker run --rm -e AGENTS=claude acpbox
+docker run --rm -e AGENTS=codex acpbox
+docker run --rm -e AGENTS=opencode,cursor acpbox
+docker run --rm -e AGENTS=opencode,claude acpbox
+docker run --rm -e AGENTS=opencode,codex acpbox
 ```
 
-With Docker Compose, set `AGENTS` in `.env`; `docker-compose.yaml` passes it as `build.args`. At **runtime**, set `ACPBOX_ACP_COMMAND` to match, e.g. `["opencode","acp"]`, `["agent","acp"]`, `["claude-agent-acp"]`, or `["codex-acp"]`, and provide credentials as required by each agent.
+With Docker Compose, set `AGENTS` in `.env` to install missing agent binaries at container startup. At **runtime**, set `ACPBOX_ACP_COMMAND` to match, e.g. `["opencode","acp"]`, `["agent","acp"]`, `["claude-agent-acp"]`, or `["codex-acp"]`, and provide credentials as required by each agent.
 
-If `AGENTS` is empty, the image contains only the Python **acpbox** package; install an agent in a derived image or bind-mount a binary.
+If `AGENTS` is empty, the image contains only the Python **acpbox** package and its system dependencies; install an agent in a derived image, set `AGENTS`, or bind-mount a binary.
 
 The Dockerfile runs **`pip install .`** (includes **uvicorn**), copies the repository, and sets **CMD** to **`acpbox`**, which calls **`uvicorn`** from **`acpbox.main.run`**. Override config with `ACPBOX_CONFIG_PATH` or env vars. **One ACP process per worker** - set **`ACPBOX_GATEWAY_WORKERS`** (or **`gateway.workers`** in YAML) for N parallel ACP processes.
 
@@ -58,9 +58,8 @@ RUN pip install --no-cache-dir .
 # ACP agent (e.g. opencode)
 RUN npm install -g opencode  # or install your agent
 
-ENV ACPBOX_CONFIG_PATH=
 EXPOSE 8080
-ENV ACPBOX_GATEWAY_WORKERS=1
+
 CMD ["acpbox"]
 ```
 

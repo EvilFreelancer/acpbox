@@ -11,11 +11,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        AGENTS: ${AGENTS:-}
     ports:
       - "${ACPBOX_GATEWAY_PORT:-8080}:8080"
     environment:
+      - AGENTS=${AGENTS:-}
       - ACPBOX_CONFIG_PATH=${ACPBOX_CONFIG_PATH:-}
       - ACPBOX_ACP_COMMAND=${ACPBOX_ACP_COMMAND:-}
       - ACPBOX_ACP_ENV=${ACPBOX_ACP_ENV:-}
