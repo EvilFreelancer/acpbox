@@ -101,7 +101,8 @@ class Config(BaseModel):
         # ACP overrides
         acp_command_raw = _env_get("ACPBOX_ACP_COMMAND", "ACP_COMMAND")
         if acp_command_raw is not None:
-            acp_data["command"] = _parse_list_from_env(acp_command_raw)
+            if acp_command_raw.strip():
+                acp_data["command"] = _parse_list_from_env(acp_command_raw)
 
         acp_env_raw = _env_get("ACPBOX_ACP_ENV", "ACP_ENV")
         if acp_env_raw is not None:

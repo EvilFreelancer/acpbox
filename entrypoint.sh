@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export HOME="${HOME:-/home/user}"
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
+
 normalize_agents() {
   local raw="${1:-}"
   raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
@@ -12,7 +15,7 @@ has_agent() {
   case "$id" in
     opencode) command -v opencode >/dev/null 2>&1 ;;
     cursor) command -v agent >/dev/null 2>&1 ;;
-    claude) command -v claude-agent-acp >/dev/null 2>&1 ;;
+    claude) command -v claude >/dev/null 2>&1 && command -v claude-agent-acp >/dev/null 2>&1 ;;
     codex) command -v codex >/dev/null 2>&1 && command -v codex-acp >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
@@ -22,7 +25,7 @@ install_agent() {
   local id="$1"
   case "$id" in
     opencode)
-      curl -fsSL https://opencode.ai/install | bash
+      npm install -g --prefix "$HOME/.local" opencode-ai
       command -v opencode >/dev/null
       ;;
     cursor)
@@ -30,7 +33,8 @@ install_agent() {
       command -v agent >/dev/null
       ;;
     claude)
-      npm install -g --prefix "$HOME/.local" @agentclientprotocol/claude-agent-acp
+      npm install -g --prefix "$HOME/.local" @anthropic-ai/claude-code @agentclientprotocol/claude-agent-acp
+      command -v claude >/dev/null
       command -v claude-agent-acp >/dev/null
       ;;
     codex)

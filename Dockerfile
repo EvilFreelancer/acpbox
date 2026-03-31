@@ -8,7 +8,6 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/user
 ENV PATH="/home/user/.local/bin:/home/user/.opencode/bin:${PATH}"
-
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash curl ca-certificates nodejs npm \
  && rm -rf /var/lib/apt/lists/*
