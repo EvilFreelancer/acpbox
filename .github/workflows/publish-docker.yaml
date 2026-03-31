@@ -5,7 +5,17 @@ name: Publish to Docker Hub
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.2.3"
+        required: false
+        type: string
   workflow_call:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.2.3"
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -28,6 +38,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -54,11 +66,7 @@ jobs:
       - name: Extract tag and metadata
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag || 'dev' }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
+          TAG="${{ inputs.tag || github.event.inputs.tag || github.ref_name || 'dev' }}"
           VERSION="${TAG#v}"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/acpbox"
           {

@@ -22,6 +22,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      skip: ${{ steps.check.outputs.skip }}
 
     steps:
       - name: Checkout repository
@@ -69,3 +72,19 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           git tag -a "$TAG" -m "Release $TAG (auto-tag on merge)"
           git push origin "$TAG"
+
+  publish-pypi:
+    name: Publish PyPI (after tagging)
+    needs: tag-version
+    if: needs.tag-version.outputs.skip != 'true'
+    uses: ./.github/workflows/publish-pypi.yaml
+    with:
+      tag: ${{ needs.tag-version.outputs.tag }}
+
+  publish-docker:
+    name: Publish Docker (after tagging)
+    needs: tag-version
+    if: needs.tag-version.outputs.skip != 'true'
+    uses: ./.github/workflows/publish-docker.yaml
+    with:
+      tag: ${{ needs.tag-version.outputs.tag }}
