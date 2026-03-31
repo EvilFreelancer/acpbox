@@ -81,6 +81,7 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/publish-pypi.yaml
+    secrets: inherit
     with:
       tag: ${{ needs.tag-version.outputs.tag }}
 
@@ -92,5 +93,6 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/publish-docker.yaml
+    secrets: inherit
     with:
       tag: ${{ needs.tag-version.outputs.tag }}
