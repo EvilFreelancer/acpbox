@@ -77,6 +77,9 @@ jobs:
     name: Publish PyPI (after tagging)
     needs: tag-version
     if: needs.tag-version.outputs.skip != 'true'
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/publish-pypi.yaml
     with:
       tag: ${{ needs.tag-version.outputs.tag }}
@@ -85,6 +88,9 @@ jobs:
     name: Publish Docker (after tagging)
     needs: tag-version
     if: needs.tag-version.outputs.skip != 'true'
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/publish-docker.yaml
     with:
       tag: ${{ needs.tag-version.outputs.tag }}
