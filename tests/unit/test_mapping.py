@@ -16,6 +16,7 @@ from acpbox.mapping import (
     openai_response_input_to_acp_prompt_blocks,
     new_chat_id,
     new_response_id,
+    sanitize_acp_tool_title,
 )
 
 
@@ -203,6 +204,20 @@ class TestAcpAggregatedTextToChatCompletion:
         }
 
 
+class TestSanitizeAcpToolTitle:
+    def test_strips_harmony_channel_suffix(self):
+        assert (
+            sanitize_acp_tool_title("atlassian_confluence_search<|channel|>commentary")
+            == "atlassian_confluence_search"
+        )
+
+    def test_plain_title_unchanged(self):
+        assert sanitize_acp_tool_title("atlassian_confluence_search") == "atlassian_confluence_search"
+
+    def test_none_unchanged(self):
+        assert sanitize_acp_tool_title(None) is None
+
+
 class TestSummarizeAcpNonStream:
     def test_merges_adjacent_thought_chunks(self):
         raw = [
@@ -211,6 +226,20 @@ class TestSummarizeAcpNonStream:
         ]
         out = summarize_acp_session_for_non_stream(raw)
         assert out == {"steps": [{"type": "reasoning", "text": "AB"}]}
+
+    def test_sanitizes_gpt_oss_harmony_tool_title(self):
+        raw = [
+            {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c1",
+                    "title": "atlassian_confluence_search<|channel|>commentary",
+                    "status": "pending",
+                },
+            },
+        ]
+        out = summarize_acp_session_for_non_stream(raw)
+        assert out["steps"][0]["title"] == "atlassian_confluence_search"
 
     def test_merges_tool_call_updates_into_one_step(self):
         raw = [

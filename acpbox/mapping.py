@@ -1,8 +1,21 @@
 """Convert between OpenAI and ACP message/request/response formats."""
 
+import re
 import time
 import uuid
 from typing import Any
+
+# gpt-oss (Harmony) may leak channel markers into tool titles, e.g.
+# "atlassian_confluence_search<|channel|>commentary". Strip for API summaries.
+_HARMONY_TOOL_TITLE_SUFFIX = re.compile(r"<\|channel\|>.*$", re.DOTALL)
+
+
+def sanitize_acp_tool_title(title: str | None) -> str | None:
+    """Remove Harmony <|channel|>... suffix from ACP tool titles when present."""
+    if not title or not isinstance(title, str):
+        return title
+    cleaned = _HARMONY_TOOL_TITLE_SUFFIX.sub("", title).strip()
+    return cleaned if cleaned else title
 
 from acp import text_block
 from acp.schema import TextContentBlock
@@ -211,7 +224,7 @@ def summarize_acp_session_for_non_stream(
                 {
                     "type": "command",
                     "tool_call_id": tool_call_id,
-                    "title": seed.get("title"),
+                    "title": sanitize_acp_tool_title(seed.get("title")),
                     "kind": seed.get("kind"),
                     "status": seed.get("status"),
                     "command": None,
@@ -232,7 +245,7 @@ def summarize_acp_session_for_non_stream(
             if ri.get("description"):
                 st["description"] = ri["description"]
         if update.get("title"):
-            st["title"] = update["title"]
+            st["title"] = sanitize_acp_tool_title(update["title"])
         if update.get("kind"):
             st["kind"] = update["kind"]
         if update.get("status"):
