@@ -15,6 +15,8 @@ Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](http
    - `GET /v1/models` – Uses the worker's ACP process: `initialize` (once) and `session/new`, returns **modes** (`modes.availableModes[].id`, e.g. OpenCode's `plan`, `build`) as the list of models.
    - `POST /v1/chat/completions` – Uses the worker's ACP process; `model` selects the ACP mode. Reply as chat completion, or **Server-Sent Events** when `"stream": true` (OpenAI-style `chat.completion.chunk` lines and `data: [DONE]`). With `stream: false`, optional **`acp`** is `{ "steps": [ reasoning + command summaries ] }` (no raw chunks). With `stream: true`, each chunk may still carry raw **`acp`** from the wire (see `docs/api-mapping.md`).
    - `POST /v1/responses` – Same; optional `chat_id` for client-side continuity (non-streaming only); **`acp.steps`** when present, like chat.
+   - `GET /v1/agent` – Returns info about the current agent (type, config path, known permissions, writable status).
+   - `GET/PUT/PATCH /v1/agent/permissions` – Read and manage agent permissions at runtime. Changes are written to the agent's native config file and apply to all future requests. See [docs/api-mapping.md](docs/api-mapping.md).
 
 See [docs/spec.md](docs/spec.md) and [docs/agent-client-protocol/docs/protocol/transports.mdx](docs/agent-client-protocol/docs/protocol/transports.mdx) for details.
 
@@ -100,9 +102,34 @@ Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 
+## Agent permissions management
+
+The gateway detects the agent type from `acp.command` and exposes endpoints to manage its permissions at runtime. Supported agents:
+
+| Agent | Command | Config file | Permission format |
+|-------|---------|-------------|-------------------|
+| OpenCode | `opencode acp` | `{workspace}/opencode.json` | `"permission": {"read": "allow", ...}` |
+| Claude | `claude-agent-acp` | `{workspace}/.claude/settings.json` | `"permissions": {"allow": [...], "deny": [...]}` |
+| Codex | `codex-acp` | `{workspace}/codex.json` | `"permission": {...}` + `approval_mode` |
+| Cursor | `agent acp` | `{workspace}/.cursor/settings.json` | `"permission": {...}` |
+
+Permissions are written to the agent's native config file on disk. Since each request creates a new ACP session (`session/new`), the agent picks up updated permissions on the next request.
+
+**Presets** let you flip permissions in bulk: `allow_all` (full access), `deny_all` (lock everything down), `ask_all` (OpenCode only). Combine a preset with explicit overrides to allow only specific tools:
+
+```bash
+curl -X PUT http://localhost:8080/v1/agent/permissions \
+  -H 'Content-Type: application/json' \
+  -d '{"preset": "deny_all", "permissions": {"atlassian_*": "allow"}}'
+```
+
+The `writable` field in responses indicates whether the config file can be written to. If it is read-only, write endpoints return 403.
+
+See [docs/api-mapping.md](docs/api-mapping.md) for full endpoint reference.
+
 ## Tests
 
-Tests use a mock ACP over stdio (fake subprocess that responds with JSON-RPC). Route tests: `tests/test_models.py`, `tests/test_chat.py`, `tests/test_responses.py`, `tests/test_sessions.py`. Unit tests for mapping, errors, session_store, config, and stdio client in `tests/unit/`. Fixtures in `tests/conftest.py`.
+Tests use a mock ACP over stdio (fake subprocess that responds with JSON-RPC). Route tests: `tests/test_models.py`, `tests/test_chat.py`, `tests/test_responses.py`, `tests/test_sessions.py`. Agent config tests: `tests/test_agent_config.py` (adapters, detection, API, writability). Unit tests for mapping, errors, session_store, config, and stdio client in `tests/unit/`. Fixtures in `tests/conftest.py`.
 
 From repo root:
 

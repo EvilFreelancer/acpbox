@@ -30,6 +30,10 @@ ACP is a standard for communication between AI agents and clients. Key facts:
 | `POST /v1/chat/completions` | Use worker's ACP process: session/new -> optional session/set_mode -> session/prompt -> aggregate agent text from session/update -> return OpenAI chat completion with optional JSON **`acp.steps`** (summarized reasoning + commands when `stream: false`), or **SSE** when `stream: true` (raw **`acp`** per chunk; terminal `data: [DONE]`). |
 | `POST /v1/responses` | Same as above; optional `chat_id` for client continuity; optional **`acp.steps`** like chat non-stream. |
 | `DELETE /v1/responses/{id}`, `DELETE /v1/sessions/{id}` | Gateway-only session store; no ACP call. |
+| `GET /v1/agent` | Agent info: type, config path, writable status, known permissions, allowed values. 501 if unknown agent. |
+| `GET /v1/agent/permissions` | Current permissions from the agent's config file on disk. Includes `writable` flag. |
+| `PUT /v1/agent/permissions` | Replace permissions (full or preset + overrides). Written to the agent's native config file. 403 if read-only. |
+| `PATCH /v1/agent/permissions` | Partial update: merge into existing permissions. 403 if read-only. |
 
 ## Conventions
 

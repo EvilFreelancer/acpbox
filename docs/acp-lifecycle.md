@@ -23,6 +23,10 @@ For each `POST /v1/chat/completions` or `POST /v1/responses` in that worker:
 
 Stderr from the agent is logged at debug level.
 
+## Agent permissions
+
+The gateway manages the agent's permissions through its native config file (e.g. `opencode.json` for OpenCode, `.claude/settings.json` for Claude). Changes made via `PUT/PATCH /v1/agent/permissions` are written to disk. Since each request creates a fresh ACP session (`session/new`), the agent re-reads its config and applies the updated permissions. This means permission changes take effect on the very next request without restarting the ACP process.
+
 ## GET /v1/models
 
 Uses the worker's ACP process: `initialize` (if not yet done) and `session/new`, then reads **modes.availableModes** from the `session/new` result. The `id` of each mode (e.g. `plan`, `build` for OpenCode) is returned as an OpenAI model. If the agent does not report modes, the gateway uses the agent name from `initialize` or `"default"`. If the agent fails, the gateway returns 503.

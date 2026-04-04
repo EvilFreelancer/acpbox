@@ -11,8 +11,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from acpbox.acp_stdio import AcpRunner, AcpStdioError
+from acpbox.agents import create_adapter
 from acpbox.config import Config
-from acpbox.routes import chat, models, responses
+from acpbox.routes import agent_config, chat, models, responses
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.config = config
+    app.state.agent_adapter = create_adapter(config.acp.command, config.acp.workspace)
 
     @app.exception_handler(HTTPException)
     async def openai_style_http_exception(request: Request, exc: HTTPException):
@@ -66,6 +68,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.include_router(chat.router)
     app.include_router(responses.router_responses)
     app.include_router(responses.router_sessions)
+    app.include_router(agent_config.router)
 
     return app
 

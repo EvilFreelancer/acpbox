@@ -28,6 +28,8 @@ gateway:
 
 **Models:** The list of "models" in `GET /v1/models` is **not** configured here. The gateway gets it from the agent: it spawns the agent, calls `initialize` and `session/new`, and uses `modes.availableModes[].id` (e.g. OpenCode returns `plan`, `build`) as the model list.
 
+**Agent config:** The gateway detects the agent type from `acp.command` and manages its native config file for runtime permission changes via `/v1/agent/*` endpoints. The config file location depends on the agent type and `acp.workspace`. See [api-mapping.md](api-mapping.md) for details.
+
 ### `gateway`
 
 | Field | Type | Default | Description |
