@@ -25,6 +25,8 @@ def test_config_load_defaults(monkeypatch):
     assert config.gateway.threads == 1
     assert config.acp.command
     assert config.acp.workspace == "./workspace"
+    assert config.acp.stderr == "inherit"
+    assert config.acp.stderr_pipe_split is False
 
 
 def test_gateway_workers_from_env(monkeypatch):
@@ -34,6 +36,16 @@ def test_gateway_workers_from_env(monkeypatch):
     monkeypatch.setenv("ACPBOX_GATEWAY_WORKERS", "4")
     config = Config.load()
     assert config.gateway.workers == 4
+
+
+def test_acp_stderr_from_env(monkeypatch):
+    """ACPBOX_ACP_STDERR and ACPBOX_ACP_STDERR_PIPE_SPLIT override acp stderr settings."""
+    monkeypatch.delenv("ACPBOX_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("ACPBOX_ACP_STDERR", "pipe")
+    monkeypatch.setenv("ACPBOX_ACP_STDERR_PIPE_SPLIT", "1")
+    config = Config.load()
+    assert config.acp.stderr == "pipe"
+    assert config.acp.stderr_pipe_split is True
 
 
 def test_gateway_threads_from_env(monkeypatch):

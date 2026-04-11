@@ -3,10 +3,13 @@
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
+
+
+AcpStderrMode = Literal["inherit", "pipe", "devnull"]
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -45,6 +48,20 @@ class AcpConfig(BaseModel):
     workspace: str = Field(
         default="./workspace",
         description="Directory passed as cwd to ACP session/new (resolved to absolute). Env: ACPBOX_ACP_WORKSPACE.",
+    )
+    stderr: AcpStderrMode = Field(
+        default="inherit",
+        description=(
+            "Child process stderr: inherit (same as gateway, typical Docker stderr), "
+            "pipe (read and forward to container streams), devnull (discard). Env: ACPBOX_ACP_STDERR."
+        ),
+    )
+    stderr_pipe_split: bool = Field(
+        default=False,
+        description=(
+            "Only when stderr is pipe: send error-like lines to process stderr, other lines to stdout. "
+            "Env: ACPBOX_ACP_STDERR_PIPE_SPLIT (1/true/yes)."
+        ),
     )
 
 
@@ -111,6 +128,15 @@ class Config(BaseModel):
         acp_workspace_raw = _env_get("ACPBOX_ACP_WORKSPACE", "ACP_WORKSPACE")
         if acp_workspace_raw is not None:
             acp_data["workspace"] = acp_workspace_raw
+
+        acp_stderr_raw = _env_get("ACPBOX_ACP_STDERR", "ACP_STDERR")
+        if acp_stderr_raw is not None and str(acp_stderr_raw).strip():
+            acp_data["stderr"] = str(acp_stderr_raw).strip().lower()
+
+        acp_stderr_split_raw = _env_get("ACPBOX_ACP_STDERR_PIPE_SPLIT", "ACP_STDERR_PIPE_SPLIT")
+        if acp_stderr_split_raw is not None and str(acp_stderr_split_raw).strip():
+            v = str(acp_stderr_split_raw).strip().lower()
+            acp_data["stderr_pipe_split"] = v in ("1", "true", "yes", "on")
 
         # Gateway overrides
         gateway_host_raw = _env_get("ACPBOX_GATEWAY_HOST", "GATEWAY_HOST")

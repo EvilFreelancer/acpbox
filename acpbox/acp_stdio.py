@@ -10,6 +10,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import sys
 from pathlib import Path
 from collections.abc import AsyncGenerator
 from typing import Any, Literal, Sequence
@@ -42,6 +44,59 @@ async def _read_message(stream: asyncio.StreamReader) -> dict[str, Any] | None:
     if not line:
         return None
     return json.loads(line.decode("utf-8").strip())
+
+
+# Heuristic for stderr_pipe_split: route these to process stderr, rest to stdout.
+_STDERR_LINE_ERROR_HINT = re.compile(
+    r"(?i)(error|exception|traceback|fatal|panic|failed\b|errno|warn(ing)?\b)"
+)
+
+
+async def _drain_stderr(
+    stream: asyncio.StreamReader,
+    *,
+    pipe_split: bool = False,
+) -> None:
+    """
+    Read child stderr until EOF. Required when stderr=PIPE (otherwise the pipe buffer fills).
+
+    Forwards lines to the gateway process streams so Docker shows them on stdout/stderr:
+    - pipe_split False: all lines to sys.stderr
+    - pipe_split True: error-like lines to sys.stderr, others to sys.stdout
+    """
+    try:
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if not text:
+                continue
+            if pipe_split:
+                if _STDERR_LINE_ERROR_HINT.search(text):
+                    sys.stderr.write(text + "\n")
+                    sys.stderr.flush()
+                else:
+                    sys.stdout.write(text + "\n")
+                    sys.stdout.flush()
+            else:
+                sys.stderr.write(text + "\n")
+                sys.stderr.flush()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.debug("ACP stderr drain stopped: %s", e)
+
+
+def _subprocess_stderr_arg(mode: str) -> int | None:
+    """Map config stderr mode to asyncio subprocess stderr argument."""
+    if mode == "inherit":
+        return None
+    if mode == "devnull":
+        return asyncio.subprocess.DEVNULL
+    if mode == "pipe":
+        return asyncio.subprocess.PIPE
+    raise ValueError(f"unknown ACP stderr mode: {mode!r}")
 
 
 def _resolved_workspace_dir(workspace: str) -> str:
@@ -105,33 +160,48 @@ class AcpRunner:
         command: list[str],
         env: dict[str, str],
         workspace: str,
+        *,
+        stderr_mode: Literal["inherit", "pipe", "devnull"] = "inherit",
+        stderr_pipe_split: bool = False,
     ) -> None:
         self._command = command
         self._env = dict(os.environ) | env
         self._workspace_dir = _resolved_workspace_dir(workspace)
+        self._stderr_mode = stderr_mode
+        self._stderr_pipe_split = stderr_pipe_split
         self._proc: asyncio.subprocess.Process | None = None
         self._stdin_writer: asyncio.StreamWriter | None = None
         self._stdout_reader: asyncio.StreamReader | None = None
         self._next_id = 0
         self._initialized = False
         self._lock = asyncio.Lock()
+        self._stderr_drain_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Spawn the ACP process and run initialize."""
         if self._proc is not None:
             return
-        logger.info("Starting ACP agent (one per worker): %s", self._command)
+        logger.info(
+            "Starting ACP agent (one per worker): %s (stderr=%s)",
+            self._command,
+            self._stderr_mode,
+        )
+        stderr_arg = _subprocess_stderr_arg(self._stderr_mode)
         self._proc = await asyncio.create_subprocess_exec(
             *self._command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=stderr_arg,
             env=self._env,
             cwd=self._workspace_dir,
         )
         assert self._proc.stdin and self._proc.stdout
         self._stdin_writer = self._proc.stdin
         self._stdout_reader = self._proc.stdout
+        if self._stderr_mode == "pipe" and self._proc.stderr is not None:
+            self._stderr_drain_task = asyncio.create_task(
+                _drain_stderr(self._proc.stderr, pipe_split=self._stderr_pipe_split)
+            )
         await self._do_initialize()
 
     async def _do_initialize(self) -> None:
@@ -386,11 +456,19 @@ class AcpRunner:
         if self._proc is None:
             return
         p = self._proc
+        stderr_task = self._stderr_drain_task
+        self._stderr_drain_task = None
         self._proc = None
         self._stdin_writer = None
         self._stdout_reader = None
         self._initialized = False
         if p.returncode is not None:
+            if stderr_task and not stderr_task.done():
+                stderr_task.cancel()
+                try:
+                    await stderr_task
+                except asyncio.CancelledError:
+                    pass
             return
         logger.info("Stopping ACP agent (PID %s)", p.pid)
         p.terminate()
@@ -399,6 +477,15 @@ class AcpRunner:
         except asyncio.TimeoutError:
             p.kill()
             await p.wait()
+        if stderr_task:
+            try:
+                await asyncio.wait_for(stderr_task, timeout=3.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                stderr_task.cancel()
+                try:
+                    await stderr_task
+                except asyncio.CancelledError:
+                    pass
 
 
 # Standalone helpers for tests or one-off use (spawn per call)
@@ -408,6 +495,8 @@ async def get_agent_models(
     workspace: str,
     *,
     timeout: float = 30.0,
+    stderr_mode: Literal["inherit", "pipe", "devnull"] = "inherit",
+    stderr_pipe_split: bool = False,
 ) -> list[str]:
     """
     Spawn ACP agent, call initialize and session/new, return list of model ids.
@@ -415,15 +504,21 @@ async def get_agent_models(
     """
     env_full = dict(os.environ) | env
     work_dir = _resolved_workspace_dir(workspace)
+    stderr_arg = _subprocess_stderr_arg(stderr_mode)
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=stderr_arg,
         env=env_full,
         cwd=work_dir,
     )
     assert proc.stdin and proc.stdout
+    stderr_task: asyncio.Task[None] | None = None
+    if stderr_mode == "pipe" and proc.stderr is not None:
+        stderr_task = asyncio.create_task(
+            _drain_stderr(proc.stderr, pipe_split=stderr_pipe_split)
+        )
     try:
         init_result = await _request(
             proc.stdin,
@@ -464,6 +559,15 @@ async def get_agent_models(
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
+        if stderr_task:
+            try:
+                await asyncio.wait_for(stderr_task, timeout=3.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                stderr_task.cancel()
+                try:
+                    await stderr_task
+                except asyncio.CancelledError:
+                    pass
 
 
 async def run_single_turn(
