@@ -26,6 +26,11 @@ from acp.schema import TextContentBlock
 
 logger = logging.getLogger(__name__)
 
+# Default asyncio subprocess StreamReader limit is 64 KiB; ACP JSON-RPC lines (e.g. large
+# tool lists from opencode) can exceed that. Pass limit= to create_subprocess_exec and use
+# readuntil so one line may grow up to _MAX_JSON_LINE bytes.
+_MAX_JSON_LINE = 32 * 1024 * 1024
+
 
 class AcpStdioError(Exception):
     """Raised when ACP stdio handshake or call fails."""
@@ -40,8 +45,17 @@ async def _write_message(stream: asyncio.StreamWriter, obj: dict[str, Any]) -> N
 
 async def _read_message(stream: asyncio.StreamReader) -> dict[str, Any] | None:
     """Read one newline-delimited JSON-RPC message. Returns None on EOF."""
-    line = await stream.readline()
-    if not line:
+    try:
+        line = await stream.readuntil(b"\n")
+    except asyncio.IncompleteReadError as e:
+        if not e.partial:
+            return None
+        line = e.partial
+    except asyncio.LimitOverrunError as e:
+        raise AcpStdioError(
+            f"ACP JSON-RPC line exceeds {_MAX_JSON_LINE} bytes; increase _MAX_JSON_LINE in acp_stdio.py"
+        ) from e
+    if not line.strip():
         return None
     return json.loads(line.decode("utf-8").strip())
 
@@ -194,6 +208,7 @@ class AcpRunner:
             stderr=stderr_arg,
             env=self._env,
             cwd=self._workspace_dir,
+            limit=_MAX_JSON_LINE,
         )
         assert self._proc.stdin and self._proc.stdout
         self._stdin_writer = self._proc.stdin
@@ -512,6 +527,7 @@ async def get_agent_models(
         stderr=stderr_arg,
         env=env_full,
         cwd=work_dir,
+        limit=_MAX_JSON_LINE,
     )
     assert proc.stdin and proc.stdout
     stderr_task: asyncio.Task[None] | None = None
