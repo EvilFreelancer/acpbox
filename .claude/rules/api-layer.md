@@ -1,0 +1,69 @@
+---
+description: FastAPI routes, OpenAI-compatible contract, error codes, and SSE streaming rules
+paths:
+  - "acpbox/routes/**/*.py"
+  - "acpbox/main.py"
+  - "acpbox/schemas.py"
+  - "acpbox/errors.py"
+---
+
+# API Layer Rules
+
+Covers `acpbox/routes/`, `acpbox/schemas.py`, `acpbox/errors.py`, and the app factory in `acpbox/main.py`. The full contract is documented in `docs/api-mapping.md`.
+
+## Endpoints
+
+| Method and path | Router | Behavior |
+|---|---|---|
+| `GET /v1/models` | `routes/models.py` | Agent modes from `runner.get_agent_models()`; 503 on `AcpStdioError` |
+| `GET /v1/models/{model_id}` | `routes/models.py` | The model if it is one of the modes, else 404 `not_found` |
+| `POST /v1/chat/completions` | `routes/chat.py` | `run_turn` -> `chat.completion` with optional `acp.steps`; `stream: true` -> SSE from `run_turn_stream` |
+| `POST /v1/responses` | `routes/responses.py` | `run_turn` -> `response` with `chat_id` and optional `acp.steps`; no streaming |
+| `GET /v1/responses/{response_id}` | `routes/responses.py` | 501, responses are not stored |
+| `DELETE /v1/responses/{response_id}` | `routes/responses.py` | Remove from `session_store`; 404 if unknown |
+| `DELETE /v1/sessions/{chat_id}` | `routes/responses.py` | Extension: remove every response of a session; 404 if unknown |
+| `GET /v1/agent` | `routes/agent_config.py` | Adapter info (`agent_type`, `config_path`, `writable`, `known_permissions`, `allowed_values`) |
+| `GET /v1/agent/permissions` | `routes/agent_config.py` | Flat permissions read from the native config file |
+| `PUT /v1/agent/permissions` | `routes/agent_config.py` | Replace: preset first, explicit `permissions` merged on top |
+| `PATCH /v1/agent/permissions` | `routes/agent_config.py` | Merge into the current permissions |
+
+## Handler Rules
+
+1. **Thin handlers.** Validate with Pydantic, convert with `mapping`, call `request.app.state.runner` or `request.app.state.agent_adapter`, convert errors, return a schema object. No JSON-RPC, subprocess, or native file-format logic here.
+2. **Validate before side effects.** Reject invalid input (400 / 422) before calling the runner or writing any config file, so a rejected request leaves no partial state behind.
+3. **Schemas.** Public request/response models live in `acpbox/schemas.py`; set `response_model` on non-streaming routes. OpenAI extensions (`acp`, `chat_id`) are optional fields defaulting to `None`, so standard OpenAI clients ignore them.
+4. **Runner access** only through its public async methods (`get_agent_models`, `run_turn`, `run_turn_stream`). Never reach into private attributes.
+5. **Documentation.** Every handler has a docstring describing its behavior; FastAPI exposes it in the OpenAPI schema.
+
+## Error Contract
+
+Every error body has the OpenAI shape `{"error": {"code": ..., "message": ..., "type": ...}}` (`type` is optional). Raise `HTTPException(status_code, detail=...)` with `detail` from `openai_error_body(message, code)` or a `{"code", "message"}` dict; the handler registered in `create_app` wraps it.
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_input` | `messages` / `input` produce no prompt blocks |
+| 403 | `config_not_writable` | Agent config file or its directory is read-only |
+| 404 | `not_found` | Unknown model, response id, or session |
+| 422 | `empty_request`, `invalid_preset`, `invalid_permission_value` | Invalid permission requests (FastAPI body validation also returns 422) |
+| 500 | `config_read_error`, `config_write_error` | Adapter I/O failures |
+| 501 | `agent_not_supported`, `server_error` | No adapter for the ACP command; endpoint not implemented |
+| 503 | `server_error` | Any `AcpStdioError`: agent not running, EOF, timeout, JSON-RPC error |
+
+## Streaming (SSE)
+
+- `Content-Type: text/event-stream`; each event is `data: <json>\n\n`; the stream ends with `data: [DONE]\n\n`.
+- Every JSON object is a `chat.completion.chunk` sharing one `id`, `created`, and `model`.
+- A `{"role": "assistant"}` delta precedes the first text delta; exactly one chunk carries a non-null `finish_reason`.
+- Non-text ACP updates are forwarded as chunks with an empty `delta` and an `acp` object `{"sessionId", "update"}`.
+- The first event is pulled before `StreamingResponse` is returned, so a failure before any output becomes a regular 503 JSON error. Keep this property when refactoring.
+
+## Changing the API
+
+- Change tests in `tests/test_<route>.py` first, then the handler, then `docs/api-mapping.md`, the API table in `docs/spec.md`, and README.
+- Keep the `app` fixture in `tests/conftest.py` (routers and exception handler) aligned with `create_app`.
+
+## References
+
+- .claude/rules/architecture.md
+- .claude/rules/core-modules.md
+- @docs/api-mapping.md

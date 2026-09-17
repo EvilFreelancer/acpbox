@@ -1,0 +1,52 @@
+---
+description: Python code style, typing, async and error conventions, language of comments and rule files
+---
+
+# Code Style Rules
+
+## Language
+
+1. Code comments, docstrings, log messages, and error messages are written **only in English**.
+2. Agent rule files (`.cursor/rules/*.mdc`, `.claude/rules/*.md`), the Codex index (`.codex/rules.md`), and the top-level brief (`AGENTS.md`, with `CLAUDE.md` as a symlink to it) are written **in English** unless the maintainer explicitly asks for another language. When that happens, switch every rule tree at once.
+3. Chat replies to the user follow the language the user writes in.
+4. End every file with a single trailing newline.
+
+## Python
+
+- Target Python >= 3.11 (CI runs 3.11). Do not use syntax or stdlib APIs introduced later.
+- Type hints on all functions and methods, in the modern form used across the codebase: `str | None`, `list[str]`, `dict[str, Any]`. Do not introduce `Optional`, `List`, `Dict`, or `from __future__ import annotations`.
+- Pydantic v2 API only: `BaseModel`, `Field(default=..., description=...)`, `model_dump()`, `model_validate()`. Public request/response models live in `acpbox/schemas.py`; models private to one router may stay in that router (as in `routes/agent_config.py`).
+- Imports at the top of the module, grouped stdlib / third-party / local with blank lines between groups. Use absolute `from acpbox.x import y` across packages; relative `from .base import ...` only inside `acpbox/agents/`.
+- Keep lines at or below 120 characters.
+- No linter or formatter is configured. Match the surrounding code and never reformat lines you did not change.
+
+## Structure and Naming
+
+- Every module starts with a one-line docstring describing its role.
+- Module order: docstring, imports, constants and `logger`, types and exceptions, private helpers, public classes and functions.
+- `PascalCase` classes, `snake_case` functions and methods, `UPPER_SNAKE_CASE` constants, a leading `_` for private helpers and for lock-free internals such as `_run_turn_unsafe`.
+- Docstrings: a concise summary line; add detail when behavior is non-obvious (protocol quirks, invariants, ordering). `Args:` / `Returns:` sections are optional.
+- Logging: `logger = logging.getLogger(__name__)` and `%s`-style arguments, not f-strings. Never log secrets, API keys, or the full environment passed to the agent.
+
+## Async and I/O
+
+- The gateway is asyncio-based. Request handlers must not block on subprocess or network calls; the agent is driven through `asyncio.create_subprocess_exec` streams.
+- Every await on the agent's stdout has a timeout.
+- Small synchronous JSON file I/O for agent config files is acceptable.
+- Write JSON config files with `json.dump(config, f, indent=2, ensure_ascii=False)` followed by a newline, as the adapters do.
+
+## Errors
+
+- Raise specific exceptions: `AcpStdioError` for ACP transport and protocol failures, `ValueError` for invalid adapter input such as an unknown preset.
+- Convert to HTTP only in routes: `HTTPException(status_code, detail=openai_error_body(message, code))` or `detail={"code": ..., "message": ...}`; the handler in `create_app` wraps it into `{"error": {...}}`.
+- Never swallow exceptions silently. Log with context, then re-raise or convert.
+
+## Secrets
+
+- Never commit secrets. API keys come from `.env` (gitignored) or the process environment.
+- Values from `acp.env` reach the agent subprocess only; do not echo them in logs or HTTP responses.
+
+## References
+
+- @pyproject.toml
+- .claude/rules/architecture.md

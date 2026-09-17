@@ -1,0 +1,65 @@
+---
+description: Rules for the ACP stdio transport, OpenAI-ACP mapping, agent config adapters, configuration, session store, and deployment files
+globs: acpbox/acp_stdio.py, acpbox/mapping.py, acpbox/config.py, acpbox/session_store.py, acpbox/agents/**/*.py, config.example.yaml, .env.example, docker-compose.yaml, Dockerfile, entrypoint.sh
+alwaysApply: false
+---
+
+# Core Modules Rules
+
+Covers the ACP transport, OpenAI <-> ACP translation, agent config adapters, configuration, the in-memory session store, and the files that expose them to operators.
+
+## `acp_stdio.py` - ACP transport (`AcpRunner`)
+
+- **Framing.** One JSON-RPC 2.0 object per line, UTF-8, `json.dumps(..., ensure_ascii=False)` without embedded newlines. Reads use `readuntil(b"\n")` with the stream limit `_MAX_JSON_LINE` (32 MiB), because agents send very large lines such as tool lists.
+- **Lifecycle.** `start()` spawns the command with `cwd` = resolved workspace and `env` = process environment merged with `acp.env`, then sends `initialize` once. `stop()` sends SIGTERM, waits 5 s, then SIGKILL, and finishes the stderr drain task.
+- **Concurrency.** Public methods (`get_agent_models`, `run_turn`, `run_turn_stream`) take `self._lock` and delegate to `_*_unsafe` methods. New operations follow the same pattern; two requests must never interleave on the pipes.
+- **Request ids.** `_next_id` grows after every request the gateway sends. Responses are matched by id; messages with a `method` are notifications or agent-to-client requests.
+- **Turns.** `agent_message_chunk` text is the assistant reply. Every other `session/update` kind is collected (`run_turn`) or yielded as `("session", {...})` (`run_turn_stream`). The turn ends with the `session/prompt` response and its `stopReason`.
+- **Agent-to-client requests** (`session/request_permission` today, `fs/*` or `terminal/*` if capabilities are ever advertised) must receive a reply that validates against the matching model in `acp.schema`. An unanswered or malformed reply can stall or break the turn.
+- **Errors.** Raise `AcpStdioError` with a readable message on EOF, timeout, JSON-RPC error, or missing `sessionId`. Every read from stdout has a timeout.
+- **stderr.** Modes `inherit`, `pipe`, `devnull` come from config; in `pipe` mode the stream must always be drained or the child blocks.
+- Module-level `get_agent_models()` and `run_single_turn()` spawn a process per call. They are not used by the app and must not appear in request paths.
+
+## `mapping.py` - OpenAI <-> ACP translation
+
+- Pure functions only: no I/O, no runner, no FastAPI.
+- Prompt building flattens all messages (chat) or input items (responses) into **one** ACP text block of `"role: content"` parts joined by blank lines, built with `acp.text_block`. Only text parts are used (`text` for chat, `input_text` for responses).
+- A `metadata.model` value is prepended as a `model: <value>` line so OpenCode can pick the underlying LLM.
+- `summarize_acp_session_for_non_stream` merges consecutive `agent_thought_chunk` text into `reasoning` steps, folds `tool_call` / `tool_call_update` into one `command` step per `toolCallId`, ignores noise kinds (`usage_update`, `plan`, mode and command updates), and returns `None` when no steps remain.
+- Tool titles go through `sanitize_acp_tool_title`, which strips gpt-oss Harmony `<|channel|>...` suffixes.
+- `openai_messages_to_acp_input`, `openai_response_input_to_acp_input`, and `acp_run_output_to_*` are legacy helpers from the ACP-over-HTTP era, used only by tests. Do not build new features on them.
+
+## `agents/` - agent config adapters
+
+- `AgentConfigAdapter` in `base.py` is the contract: `config_path`, `read_config`, `write_config`, `get_permissions`, `set_permissions`, `update_permissions`, `known_permissions`, `allowed_values`, `apply_preset`, `is_writable`.
+- The API speaks a flat `{permission: value}` map; each adapter translates to its native file:
+  - OpenCode - `{workspace}/opencode.json`, `"permission"` flat map, values `allow`, `deny`, `ask`;
+  - Claude - `{workspace}/.claude/settings.json`, `"permissions": {"allow": [...], "deny": [...]}` with sorted lists, pattern keys such as `Bash(git *)` kept verbatim;
+  - Codex - `{workspace}/codex.json`, `"permission"` flat map plus `approval_mode` set by the `suggest`, `auto-edit`, `full-auto` presets;
+  - Cursor - `{workspace}/.cursor/settings.json`, `"permission"` flat map.
+- Writes preserve every non-permission key of the native file (model, provider, mcp, and so on).
+- `set_permissions` replaces, `update_permissions` merges; both return the complete resulting state.
+- The agent type comes from the basename of `acp.command[0]` looked up in `AGENT_COMMAND_MAP`. Unknown binaries get no adapter and the API answers 501.
+
+## `config.py` - configuration
+
+- `Config.load(path)` reads optional YAML (path argument, else `ACPBOX_CONFIG_PATH`, else legacy `CONFIG_PATH`), then applies environment overrides. Environment wins over YAML.
+- Every option has an `ACPBOX_*` variable and a legacy unprefixed alias. Lists and dicts are JSON strings in the environment. Empty `ACPBOX_ACP_COMMAND` and empty numeric variables are ignored.
+- Each field names its env variable in `Field(description=...)` and validates ranges with `ge` / `le`.
+- Operator-facing mirrors stay in sync with the model: `config.example.yaml`, `.env.example`, `docs/config.md`, `docker-compose.yaml`.
+
+## `session_store.py`
+
+- In-memory, per-worker maps `response_id -> chat_id` and `chat_id -> {response_id}`. It is not shared between uvicorn workers and is lost on restart; never document or rely on it as persistent.
+
+## Deployment Surface
+
+- `Dockerfile` installs the package with `pip install .` and runs as `user` (UID/GID 1000). `entrypoint.sh` installs the agents listed in `AGENTS` (`opencode`, `cursor`, `claude`, `codex`) at container start, then execs `acpbox`.
+- Adding or renaming an agent means matching changes in `entrypoint.sh`, `acpbox/agents/__init__.py`, `.env.example`, README tables, and `docs/deployment.md`.
+- CI: `tests-on-pr.yaml` runs the suite on every PR. Merging a PR into `main` auto-tags the next patch version (`tag-on-merge.yaml`) and publishes to PyPI and Docker Hub. The version comes from git tags via `setuptools-scm`; never hardcode it in `pyproject.toml`.
+
+## References
+
+- @architecture.mdc
+- @docs/acp-lifecycle.md
+- @docs/config.md

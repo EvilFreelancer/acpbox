@@ -1,0 +1,58 @@
+---
+description: Runtime model, layered module map, allowed dependencies, and boundaries of the ACPBox gateway
+globs: acpbox/**/*.py
+alwaysApply: true
+---
+
+# Architecture Rules
+
+ACPBox is an OpenAI-compatible HTTP gateway (FastAPI served by uvicorn) in front of an Agent Client Protocol (ACP) agent. The agent runs as a subprocess and speaks newline-delimited JSON-RPC 2.0 over stdio. Intended behavior is specified in `docs/spec.md`, `docs/api-mapping.md`, and `docs/acp-lifecycle.md`.
+
+## Runtime Invariants
+
+- **One ACP process per uvicorn worker.** It is started in the FastAPI lifespan (`acpbox/main.py`), stored as `app.state.runner`, reused by every request of that worker, and stopped on shutdown.
+- **One ACP session per request.** `session/new` (with `cwd` = resolved `acp.workspace` and `mcpServers: []`) -> optional `session/set_mode` (the OpenAI `model` is the ACP mode id) -> `session/prompt`.
+- **stdio is a single stream.** All access to the process goes through `AcpRunner` methods guarded by its `asyncio.Lock`. Nothing else reads or writes the pipes.
+- **Models are agent modes** (`modes.availableModes[].id` from `session/new`), never a static list in config.
+- **Gateway state is in memory and per worker** (`session_store`). Anything that must be shared across workers lives on disk (agent config files) or outside the gateway.
+- **Permissions live in the agent's native config file** inside the workspace. The next `session/new` picks up changes; the process is not restarted.
+
+## Layers
+
+Build bottom-up. A module may import only from lower layers (and, inside `acpbox/agents/`, from `base.py`).
+
+| Layer | Modules | May import from `acpbox` |
+|---|---|---|
+| L0 Foundation | `config.py`, `schemas.py`, `session_store.py`, `acp_stdio.py`, `agents/base.py` | nothing |
+| L1 Translation and adapters | `errors.py`, `mapping.py`, `agents/opencode.py`, `agents/claude.py`, `agents/codex.py`, `agents/cursor.py` | L0 |
+| L2 Registry | `agents/__init__.py` (`AGENT_COMMAND_MAP`, `create_adapter`, `detect_agent_type`) | L0, L1 |
+| L3 HTTP routes | `routes/models.py`, `routes/chat.py`, `routes/responses.py`, `routes/agent_config.py` | L0-L2 |
+| L4 Composition | `main.py` (`create_app`, `lifespan`, exception handler, `run`), `cli.py` | L0-L3 |
+
+What each layer may know about the outside world:
+- `acp_stdio.py` - stdlib asyncio subprocess streams plus `acp.schema` models. No OpenAI shapes, no FastAPI, no HTTP.
+- `mapping.py` - pure OpenAI <-> ACP conversion using `acp` SDK helpers (`acp.text_block`) and `schemas.py`. No I/O, no runner calls.
+- `agents/*` - JSON file I/O inside the workspace only. No FastAPI.
+- `config.py` - YAML file plus environment. No other project module.
+- FastAPI request/response machinery appears only in `routes/` and `main.py`; `errors.py` uses nothing but `fastapi.status` constants.
+
+## Boundaries
+
+- Routes are thin: validate with Pydantic, build prompt blocks with `mapping`, call `request.app.state.runner` or `request.app.state.agent_adapter`, turn `AcpStdioError` / adapter errors into OpenAI-style HTTP errors, and return schema objects. No JSON-RPC in routes.
+- Routes never import each other or `acpbox.main`.
+- `acp_stdio.py` never imports `mapping`, `schemas`, `errors`, or `routes`. Protocol details (ids, framing, timeouts, replies to agent requests) stay inside it.
+- Agent-specific behavior goes into an `AgentConfigAdapter` subclass plus an `AGENT_COMMAND_MAP` entry, never into routes.
+- `main.py` is the only place that wires config, runner, adapter, and routers together. `cli.py` imports `acpbox.main` lazily inside `main()`.
+- No circular imports.
+
+## Design Principles
+
+1. **Lower layers first.** A capability must exist and be tested in its layer before an upper layer uses it (@implementation-order.mdc).
+2. **The OpenAI shape is a public contract.** Prefer additive, optional extensions (such as `acp` and `chat_id`); breaking changes need an explicit decision and a docs update.
+3. **The ACP SDK is the protocol authority.** Build and validate payloads with `agent-client-protocol` (`acp`, `acp.schema`) instead of guessing shapes.
+4. **Fail at the edge, loudly.** Transport and protocol failures surface as `AcpStdioError` and become OpenAI-style error bodies, never empty successful replies.
+
+## References
+
+- @docs/spec.md
+- @code-style.mdc
