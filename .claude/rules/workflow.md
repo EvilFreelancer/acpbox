@@ -1,0 +1,105 @@
+---
+description: BDD/TDD workflow for features, bug fixes, docs sync, final checks, and Rules Sync
+---
+
+# Workflow: BDD/TDD for Features, Bugs, and Docs
+
+Tests are the long-term memory of ACPBox. Behavior is specified by a test first and implemented second. Changes are built in layers (see .claude/rules/architecture.md and .claude/rules/implementation-order.md): start in the lowest layer the change touches and move upward only after that layer is green.
+
+## Environment
+
+- Python >= 3.11 (CI uses 3.11). Use the repo-local virtualenv:
+  ```bash
+  python3 -m venv .venv
+  .venv/bin/pip install -e ".[dev]"
+  ```
+- `Config.load()` reads `ACPBOX_*` variables, so make sure your shell does not leak them into test runs.
+- Tests never need real agent binaries, API keys, or network access.
+
+## New Features
+
+Triggers: "feature", "add", "implement", "support", "фича", "добавить", "реализовать".
+
+Do not skip or reorder steps: failing test -> confirm red -> implement -> green -> full suite -> docs -> report.
+
+1. **Describe the behavior as a test** at the lowest layer that owns it (layers in .claude/rules/architecture.md):
+   - OpenAI <-> ACP translation, `acp.steps` summaries -> `tests/unit/test_mapping.py`;
+   - config parsing and env overrides -> `tests/unit/test_config.py`;
+   - agent detection, adapters, `/v1/agent/*` -> `tests/test_agent_config.py`;
+   - HTTP contract of models/chat/responses/sessions -> `tests/test_<route>.py` with the `client` fixture;
+   - stdio transport (`AcpRunner`) -> a test module that drives a fake ACP agent subprocess (see .claude/rules/testing.md).
+   Assert observable outcomes: HTTP status, JSON body, SSE chunk sequence, files written to the workspace, JSON-RPC messages sent to the agent.
+2. **Confirm red.** Run only the new test, e.g. `.venv/bin/pytest tests/unit/test_mapping.py::TestX::test_y -v`. It must fail for the expected reason, not because of an import error or a typo.
+3. **Implement the minimum** in that layer, following .claude/rules/code-style.md. If the feature spans layers, repeat steps 1-3 per layer, bottom-up (.claude/rules/implementation-order.md).
+4. **Confirm green** for the new test.
+5. **Run the full suite** (see Final Verification). Everything must be green.
+6. **Sync docs and operator samples** in the same change (see Documentation Sync).
+7. **Report** (see Report).
+
+## Bug Fixes
+
+Triggers: "bug", "fix", "error", "broken", "баг", "ошибка", "исправить".
+
+1. **Reproduce with a test** that fails on the current code. Name it after the correct behavior, e.g. `test_put_preset_with_invalid_value_does_not_write_config`.
+2. **Confirm red** and check that it fails for the reported reason.
+3. **Fix in the lowest layer that owns the defect.** Do not patch around a transport or mapping bug inside a route.
+4. **Confirm green**, then run the full suite.
+5. Fix the docs if they described the wrong behavior. Report.
+
+## Documentation Sync
+
+User-facing documentation is `README.md` plus `docs/`. Keep it truthful in the same change:
+
+| You changed | Also update |
+|---|---|
+| Endpoint, request/response field, status code, SSE format | `docs/api-mapping.md`, API table in `docs/spec.md`, README "How it works" |
+| ACP call sequence, runner lifecycle, permission replies | `docs/acp-lifecycle.md`, `docs/spec.md` |
+| Config field or env var | `acpbox/config.py`, `config.example.yaml`, `.env.example`, `docs/config.md`, `docker-compose.yaml` when exposed there |
+| Supported agent, agent install, Docker image | `acpbox/agents/`, `entrypoint.sh`, `Dockerfile`, `docs/deployment.md`, README agent tables |
+
+`docs/agent-client-protocol` and `docs/openai-openapi` are upstream specification checkouts (gitlink entries). Never edit them.
+
+## Final Verification
+
+**MANDATORY** before calling any task done:
+
+1. Run the full suite exactly as CI does (`.github/workflows/tests-on-pr.yaml`):
+   ```bash
+   .venv/bin/pytest tests/ -v -m "not integration" --cov=acpbox --cov-report=term-missing
+   ```
+   All tests must pass, and coverage of the modules you touched must not drop.
+2. Linter: the repository has no linter or `pre-commit` configuration yet. If `.pre-commit-config.yaml` or a ruff config appears, run `pre-commit run -a` (or `ruff check .`) and fix the findings. Never reformat files you did not change.
+3. Rules Sync (below) when any rule file changed.
+4. Only then write the report.
+
+## Report
+
+Keep it short:
+- behavior added or fixed;
+- tests added or changed (red first, then green);
+- full suite result (for example `159 passed`) and coverage of touched modules;
+- docs and operator files updated;
+- rule files synced, if any.
+
+## Rules Sync
+
+**MANDATORY** - if any rule file is added or changed in this task, mirror the change to every other agent's rule tree in the same PR. Do not leave one tree ahead of the other.
+
+1. Rule trees in this repo: `.cursor/rules/` (source of truth for Cursor and Codex), `.claude/rules/`, root `AGENTS.md` with `CLAUDE.md` as a symlink to it, and the Codex bridge in `.codex/`. Include any other agent root that appears later (`.kimi/`, `.github/copilot-instructions.md`).
+2. For each edited file, locate or create its counterpart in every other tree under the same topic name (`workflow`, `testing`, `architecture`, `code-style`, `implementation-order`, `api-layer`, `core-modules`).
+3. Copy the body verbatim, then adapt frontmatter and inline links:
+   - Cursor `alwaysApply: true` <-> Claude rule **without** `paths:` (always loads);
+   - Cursor `globs: a/**/*.py, b.py` + `alwaysApply: false` <-> Claude `paths:` list with the same patterns;
+   - Cursor `@<topic>.mdc` references <-> Claude `.claude/rules/<topic>.md` references;
+   - file extension `.mdc` <-> `.md`.
+4. Keep the language identical across trees. Rule files and `AGENTS.md` are written in **English** unless the maintainer asks for another language for this project.
+5. If `AGENTS.md` changed, verify `CLAUDE.md` still resolves to it (`ls -la CLAUDE.md` shows `CLAUDE.md -> AGENTS.md`; otherwise run `ln -sf AGENTS.md CLAUDE.md`).
+6. If a rule file was added, renamed, or removed, or its `globs` / `alwaysApply` changed, refresh the index in `.codex/rules.md` and the rules table in `AGENTS.md`. The hook (`.codex/hooks.json`, `.codex/hooks/attach_rules.py`) reads `.cursor/rules/` directly and needs no update.
+7. Commit all trees together. The report must list every rule file synced.
+
+Skip only when the topic is genuinely tool-specific (e.g. a Cursor `@`-context trick with no Claude equivalent). When skipping, add a one-line comment in the diverging file so the divergence is intentional and visible.
+
+## References
+
+- .claude/rules/testing.md
+- .claude/rules/code-style.md

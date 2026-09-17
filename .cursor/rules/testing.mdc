@@ -1,0 +1,76 @@
+---
+description: pytest layout, naming, fixtures, fakes for the ACP runner, isolation, and commands
+globs: tests/**/*.py
+alwaysApply: true
+---
+
+# Testing Rules
+
+Tests are the executable specification of ACPBox. A behavior that no test asserts is not guaranteed.
+
+## Commands
+
+```bash
+# Full suite, exactly as CI runs it
+.venv/bin/pytest tests/ -v -m "not integration" --cov=acpbox --cov-report=term-missing
+
+# One module or one test
+.venv/bin/pytest tests/unit/test_mapping.py -v
+.venv/bin/pytest tests/test_chat.py::test_chat_completion_stream_acp_error -v
+```
+
+There is no `pytest.ini` and no `[tool.pytest.ini_options]`; pytest runs with defaults from the repository root. CI deselects the `integration` marker.
+
+## Layout
+
+| Path | Covers | App under test |
+|---|---|---|
+| `tests/unit/test_<module>.py` | Pure modules: `config`, `errors`, `mapping`, `session_store` | none |
+| `tests/test_models.py`, `tests/test_chat.py`, `tests/test_responses.py`, `tests/test_sessions.py` | OpenAI-compatible HTTP contract | `app` / `client` fixtures from `tests/conftest.py` with `MockRunner` |
+| `tests/test_agent_config.py` | Agent detection, adapters (unit), `/v1/agent/*` API | local `_make_app(adapter)` over a `tmp_path` workspace |
+
+New unit tests go to `tests/unit/test_<module>.py`, new route tests to `tests/test_<route>.py`.
+
+## Naming and Structure
+
+- Test functions: `test_<subject>_<expected_behavior>`, e.g. `test_list_models_503_when_agent_fails`.
+- Group unit tests of one subject in `class Test<Subject>:` (see `tests/unit/test_mapping.py`, `tests/test_agent_config.py`).
+- A one-line docstring states the behavior in terms of the public contract.
+- Arrange / Act / Assert, one behavior per test.
+- Assert the observable contract: status code, `r.json()["error"]["code"]`, response fields, the SSE chunk sequence, JSON written to disk. Do not test private helpers when a public path exists.
+
+## Fixtures and Test Doubles
+
+- `client` (from `tests/conftest.py`) is a `starlette.testclient.TestClient` over an app whose lifespan sets `app.state.runner = MockRunner()`. No ACP process is started.
+- Change runner behavior per test with `monkeypatch.setattr(client.app.state.runner, "run_turn", fake)`. Fakes are `async def`; stream fakes are async generators yielding `("text", str)`, `("session", {"sessionId": ..., "update": {...}})`, and finally `("done", stop_reason)`.
+- `MockRunner` mirrors the public interface of `AcpRunner` (`get_agent_models`, `run_turn`, `run_turn_stream`). Update it in the same change as that interface.
+- The `app` fixture duplicates router registration and the OpenAI-style exception handler from `acpbox/main.py`. When adding a router or changing the error body, update both.
+- Agent adapter tests use `tmp_path` as the workspace. Read-only scenarios use `chmod` and restore permissions in `finally`; they cannot pass when tests run as root.
+
+## Testing the stdio Transport
+
+`acpbox/acp_stdio.py` and `acpbox/main.py` have almost no automated coverage. When changing them, add tests with a fake ACP agent instead of a real binary:
+
+- write a small Python script that reads newline-delimited JSON-RPC from stdin and answers `initialize`, `session/new`, `session/set_mode`, and `session/prompt`, emitting `session/update` notifications (and, when relevant, a `session/request_permission` request) before the prompt result;
+- start it with `AcpRunner([sys.executable, str(script)], {}, str(tmp_path))`, or go end-to-end with `monkeypatch.setenv("ACPBOX_ACP_COMMAND", json.dumps([sys.executable, str(script)]))`, `create_app()` and `TestClient`;
+- mark direct async tests with `@pytest.mark.asyncio` (pytest-asyncio runs in strict mode here);
+- assert what the gateway sends to the agent as well as what it returns to the HTTP client, and validate protocol payloads against the SDK models in `acp.schema`.
+
+## Isolation
+
+- `Config.load()` reads `ACPBOX_*` and legacy unprefixed variables (`ACP_COMMAND`, `GATEWAY_PORT`, ...). Tests that load config must `monkeypatch.delenv` / `monkeypatch.setenv` every variable they depend on.
+- `acpbox.session_store` is module-level state shared by all tests in the process. Use ids unique to the test.
+- No real agent binaries, network, API keys, or writes outside `tmp_path`.
+- Tests that need a real agent must carry `@pytest.mark.integration` (deselected in CI). Register the marker in `pyproject.toml` under `[tool.pytest.ini_options]` together with the first such test.
+
+## Edge Cases Worth Covering
+
+- Empty or all-`None` messages / input (400 `invalid_input`).
+- `AcpStdioError` from every runner method (503), including before the first streamed event.
+- Agent updates of unknown `sessionUpdate` kinds and malformed payloads (non-dict `update`, missing `toolCallId`).
+- Unknown agent binary (501), read-only config (403), invalid presets and values (422), preservation of foreign keys in native config files.
+
+## References
+
+- @code-style.mdc
+- @tests/conftest.py
