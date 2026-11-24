@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 
 # ----- OpenAI request/response (minimal) -----
@@ -14,9 +14,35 @@ class ChatCompletionMessagePart(BaseModel):
     image_url: dict[str, str] | None = None
 
 
+class ChatCompletionToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ChatCompletionMessageToolCall(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    function: ChatCompletionToolCallFunction
+
+
+class ToolFunctionDefinition(BaseModel):
+    name: str
+    description: str | None = None
+    parameters: dict[str, Any] | None = None
+    strict: bool | None = None
+
+
+class ChatCompletionTool(BaseModel):
+    type: Literal["function"] = "function"
+    function: ToolFunctionDefinition
+
+
 class ChatCompletionMessage(BaseModel):
-    role: Literal["system", "user", "assistant", "developer"]
+    role: Literal["system", "user", "assistant", "developer", "tool"]
     content: str | list[ChatCompletionMessagePart] | None = None
+    tool_calls: list[ChatCompletionMessageToolCall] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
 
 
 class CreateChatCompletionRequest(BaseModel):
@@ -27,17 +53,27 @@ class CreateChatCompletionRequest(BaseModel):
     temperature: float | None = None
     top_p: float | None = None
     metadata: dict[str, Any] | None = None
+    tools: list[ChatCompletionTool] | None = None
+    tool_choice: str | dict[str, Any] | None = None
 
 
 class ChatCompletionChoiceMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | None = None
+    tool_calls: list[ChatCompletionMessageToolCall] | None = None
+
+    @model_serializer
+    def _serialize(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls is not None:
+            data["tool_calls"] = [tc.model_dump() for tc in self.tool_calls]
+        return data
 
 
 class ChatCompletionChoice(BaseModel):
     index: int = 0
     message: ChatCompletionChoiceMessage
-    finish_reason: Literal["stop", "length", "content_filter"] = "stop"
+    finish_reason: Literal["stop", "length", "content_filter", "tool_calls"] = "stop"
 
 
 class Usage(BaseModel):
