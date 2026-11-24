@@ -3,6 +3,9 @@
 import inspect
 import logging
 import os
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -13,22 +16,138 @@ from fastapi.responses import JSONResponse
 from acpbox.acp_stdio import AcpRunner, AcpStdioError
 from acpbox.agents import create_adapter
 from acpbox.config import Config
+from acpbox.request_logger import RequestLogger, current_request_id
 from acpbox.routes import agent_config, chat, models, responses
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_BODYLESS_METHODS = frozenset({"GET", "HEAD", "DELETE", "OPTIONS"})
+
+
+def _decode_asgi_headers(raw_headers: Sequence[tuple[bytes, bytes]]) -> dict[str, str]:
+    """Decode ASGI header byte pairs into a lowercase-keyed string mapping."""
+    headers: dict[str, str] = {}
+    for raw_name, raw_value in raw_headers:
+        name = raw_name.decode("latin-1").lower()
+        value = raw_value.decode("latin-1")
+        if name in headers:
+            headers[name] = f"{headers[name]}, {value}"
+        else:
+            headers[name] = value
+    return headers
+
+
+class RequestLoggingMiddleware:
+    """Pure ASGI middleware logging raw HTTP requests/responses without buffering streams."""
+
+    def __init__(self, app: Any, *, request_logger: RequestLogger) -> None:
+        self.app = app
+        self._request_logger = request_logger
+
+    async def __call__(
+        self,
+        scope: dict[str, Any],
+        receive: Callable[[], Awaitable[dict[str, Any]]],
+        send: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = uuid.uuid4().hex
+        token = current_request_id.set(request_id)
+        start_time = time.perf_counter()
+
+        method = str(scope.get("method", ""))
+        path = str(scope.get("path", ""))
+        raw_qs = scope.get("query_string", b"")
+        query_string = raw_qs.decode("latin-1") if isinstance(raw_qs, bytes) else str(raw_qs)
+        req_headers = _decode_asgi_headers(scope.get("headers") or [])
+
+        req_body_chunks: list[bytes] = []
+        request_logged = False
+
+        def _emit_request_log() -> None:
+            nonlocal request_logged
+            if request_logged:
+                return
+            request_logged = True
+            self._request_logger.log_http_request(
+                request_id=request_id,
+                method=method,
+                path=path,
+                query_string=query_string,
+                headers=req_headers,
+                raw_body=b"".join(req_body_chunks),
+            )
+
+        has_body_header = any(
+            (k.lower() == "transfer-encoding")
+            or (k.lower() == "content-length" and v.strip() not in ("", "0"))
+            for k, v in req_headers.items()
+        )
+        if method.upper() in _BODYLESS_METHODS and not has_body_header:
+            _emit_request_log()
+
+        async def receive_wrapper() -> dict[str, Any]:
+            message = await receive()
+            if message.get("type") == "http.request":
+                body = message.get("body", b"")
+                if body:
+                    req_body_chunks.append(body)
+                if not message.get("more_body", False):
+                    _emit_request_log()
+            return message
+
+        resp_status = 500
+        resp_headers: dict[str, str] = {}
+        resp_body_chunks: list[bytes] = []
+
+        async def send_wrapper(message: dict[str, Any]) -> None:
+            nonlocal resp_status, resp_headers
+            msg_type = message.get("type")
+            if msg_type == "http.response.start":
+                _emit_request_log()
+                resp_status = int(message.get("status", 500))
+                resp_headers = _decode_asgi_headers(message.get("headers") or [])
+            elif msg_type == "http.response.body":
+                body = message.get("body", b"")
+                if body:
+                    resp_body_chunks.append(body)
+            await send(message)
+
+        try:
+            try:
+                await self.app(scope, receive_wrapper, send_wrapper)
+            finally:
+                _emit_request_log()
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                self._request_logger.log_http_response(
+                    request_id=request_id,
+                    method=method,
+                    path=path,
+                    status_code=resp_status,
+                    headers=resp_headers,
+                    raw_body=b"".join(resp_body_chunks),
+                    duration_ms=duration_ms,
+                )
+        finally:
+            current_request_id.reset(token)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Start one ACP agent process per worker; stop on shutdown. With 8 workers you get 8 ACP instances."""
     config = app.state.config
+    request_logger: RequestLogger | None = getattr(app.state, "request_logger", None)
     runner = AcpRunner(
         command=config.acp.command,
         env=config.acp.env,
         workspace=config.acp.workspace,
         stderr_mode=config.acp.stderr,
         stderr_pipe_split=config.acp.stderr_pipe_split,
+        message_hook=request_logger.log_acp_message if request_logger else None,
     )
     try:
         await runner.start()
@@ -51,6 +170,12 @@ def create_app(config_path: str | None = None) -> FastAPI:
     )
     app.state.config = config
     app.state.agent_adapter = create_adapter(config.acp.command, config.acp.workspace)
+
+    request_logger: RequestLogger | None = None
+    if config.gateway.request_log_file:
+        request_logger = RequestLogger(config.gateway.request_log_file)
+        app.add_middleware(RequestLoggingMiddleware, request_logger=request_logger)
+    app.state.request_logger = request_logger
 
     @app.exception_handler(HTTPException)
     async def openai_style_http_exception(request: Request, exc: HTTPException):

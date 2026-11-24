@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 AcpStderrMode = Literal["inherit", "pipe", "devnull"]
@@ -83,6 +83,21 @@ class GatewayConfig(BaseModel):
             "(today ASGI uvicorn uses asyncio, not an OS thread pool). Env: ACPBOX_GATEWAY_THREADS."
         ),
     )
+    request_log_file: str | None = Field(
+        default=None,
+        description=(
+            "Optional JSONL file path to log raw HTTP requests/responses and raw ACP JSON-RPC traffic "
+            "(including tool calls). Env: ACPBOX_GATEWAY_REQUEST_LOG_FILE."
+        ),
+    )
+
+    @field_validator("request_log_file", mode="before")
+    @classmethod
+    def _normalize_request_log_file(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped or None
+        return v
 
 
 class Config(BaseModel):
@@ -154,5 +169,12 @@ class Config(BaseModel):
         gateway_threads_raw = _env_get("ACPBOX_GATEWAY_THREADS", "GATEWAY_THREADS")
         if gateway_threads_raw is not None and gateway_threads_raw.strip():
             gateway_data["threads"] = int(gateway_threads_raw)
+
+        gateway_request_log_file_raw = _env_get(
+            "ACPBOX_GATEWAY_REQUEST_LOG_FILE",
+            "GATEWAY_REQUEST_LOG_FILE",
+        )
+        if gateway_request_log_file_raw is not None and gateway_request_log_file_raw.strip():
+            gateway_data["request_log_file"] = gateway_request_log_file_raw.strip()
 
         return cls(acp=AcpConfig(**acp_data), gateway=GatewayConfig(**gateway_data))
