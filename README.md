@@ -4,7 +4,7 @@ OpenAI-compatible HTTP API that acts as a **gateway to the Agent Client Protocol
 
 ## Problem
 
-Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`, or **Cursor Agent** via `agent acp`) speak the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout. This gateway provides a single HTTP entry point: one base URL, OpenAI-shaped API, with one ACP binary instance per uvicorn worker.
+Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](https://github.com/sst/opencode) via `opencode acp`, **Cursor Agent** via `agent acp`, or **Antigravity CLI** via `agy acp`) speak the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout. This gateway provides a single HTTP entry point: one base URL, OpenAI-shaped API, with one ACP binary instance per uvicorn worker.
 
 ## How it works
 
@@ -13,7 +13,7 @@ Many tools and SDKs expect an OpenAI-style API. ACP agents (e.g. [OpenCode](http
 3. **Reuse per request** – Each request in that worker uses the same process: `session/new` -> optional `session/set_mode` -> `session/prompt`, then the response is returned. The process is not terminated after each request.
 4. **Translation** – OpenAI requests are converted to ACP JSON-RPC; ACP content (e.g. `session/update` agent_message_chunk) is converted back to OpenAI chat/responses format.
    - `GET /v1/models` – Uses the worker's ACP process: `initialize` (once) and `session/new`, returns **modes** (`modes.availableModes[].id`, e.g. OpenCode's `plan`, `build`) as the list of models.
-   - `POST /v1/chat/completions` – Uses the worker's ACP process; `model` selects the ACP mode. Reply as chat completion, or **Server-Sent Events** when `"stream": true` (OpenAI-style `chat.completion.chunk` lines and `data: [DONE]`). With `stream: false`, optional **`acp`** is `{ "steps": [ reasoning + command summaries ] }` (no raw chunks). With `stream: true`, each chunk may still carry raw **`acp`** from the wire (see `docs/api-mapping.md`).
+   - `POST /v1/chat/completions` – Uses the worker's ACP process; `model` selects the ACP mode. Reply as chat completion, or **Server-Sent Events** when `"stream": true` (OpenAI-style `chat.completion.chunk` lines and `data: [DONE]`). Supports OpenAI client-side `tools` / `tool_choice` / `tool_calls` and `role: "tool"` turns in both JSON and SSE modes. With `stream: false`, optional **`acp`** is `{ "steps": [ reasoning + command summaries ] }` (no raw chunks). With `stream: true`, each chunk may still carry raw **`acp`** from the wire (see `docs/api-mapping.md`).
    - `POST /v1/responses` – Same; optional `chat_id` for client-side continuity (non-streaming only); **`acp.steps`** when present, like chat.
    - `GET /v1/agent` – Returns info about the current agent (type, config path, known permissions, writable status).
    - `GET/PUT/PATCH /v1/agent/permissions` – Read and manage agent permissions at runtime. Changes are written to the agent's native config file and apply to all future requests. See [docs/api-mapping.md](docs/api-mapping.md).
@@ -93,12 +93,13 @@ python -m acpbox.main --config ./config.yaml
    | Cursor Agent | `command: ["agent", "acp"]` | `export ACPBOX_ACP_COMMAND='["agent","acp"]'` |
    | Claude (ACP adapter) | `command: ["claude-agent-acp"]` | `export ACPBOX_ACP_COMMAND='["claude-agent-acp"]'` |
    | Codex (ACP adapter) | `command: ["codex-acp"]` | `export ACPBOX_ACP_COMMAND='["codex-acp"]'` |
+   | Antigravity CLI (`agy`) | `command: ["agy", "acp"]` | `export ACPBOX_ACP_COMMAND='["agy","acp"]'` |
 
    Use an absolute path if the binary is not on `PATH` (e.g. `["/home/you/.local/bin/agent","acp"]`). Cursor Agent must be installed and logged in (`agent login`) so the subprocess can reach your account.
 
 3. **Run** – Start **`acpbox`** with **`ACPBOX_CONFIG_PATH`** (and other env vars) as needed. Use **`gateway.workers`** in YAML or **`ACPBOX_GATEWAY_WORKERS`** for worker count (one ACP subprocess per worker). **`ACPBOX_GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your uvicorn supports a `threads=` argument (many builds do not; ASGI uses **asyncio** per process).
 
-Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` to install missing agent binaries at container startup (comma-separated `opencode`, `cursor`, `claude`, `codex`). Runtime **`ACPBOX_ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`ACPBOX_GATEWAY_WORKERS`** and **`ACPBOX_GATEWAY_THREADS`** passed through the environment.
+Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` to install missing agent binaries at container startup (comma-separated `opencode`, `cursor`, `claude`, `codex`, `agy`). Runtime **`ACPBOX_ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`ACPBOX_GATEWAY_WORKERS`** and **`ACPBOX_GATEWAY_THREADS`** passed through the environment.
 
 4. **Use** – Point any OpenAI client at `http://localhost:8080/v1` (or your host/port). List models, call chat completions or responses; the gateway translates to ACP and back.
 
@@ -112,10 +113,11 @@ The gateway detects the agent type from `acp.command` and exposes endpoints to m
 | Claude | `claude-agent-acp` | `{workspace}/.claude/settings.json` | `"permissions": {"allow": [...], "deny": [...]}` |
 | Codex | `codex-acp` | `{workspace}/codex.json` | `"permission": {...}` + `approval_mode` |
 | Cursor | `agent acp` | `{workspace}/.cursor/settings.json` | `"permission": {...}` |
+| Antigravity CLI | `agy acp` | `{workspace}/.gemini/antigravity-cli/settings.json` | `"permissions": {"allow": [...], "ask": [...], "deny": [...]}` |
 
 Permissions are written to the agent's native config file on disk. Since each request creates a new ACP session (`session/new`), the agent picks up updated permissions on the next request.
 
-**Presets** let you flip permissions in bulk: `allow_all` (full access), `deny_all` (lock everything down), `ask_all` (OpenCode only). Combine a preset with explicit overrides to allow only specific tools:
+**Presets** let you flip permissions in bulk: `allow_all` (full access), `deny_all` (lock everything down), `ask_all` (OpenCode and Antigravity CLI). Combine a preset with explicit overrides to allow only specific tools:
 
 ```bash
 curl -X PUT http://localhost:8080/v1/agent/permissions \

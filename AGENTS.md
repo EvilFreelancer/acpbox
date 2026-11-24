@@ -1,13 +1,13 @@
 # ACPBox - Agent Brief
 
-ACPBox is an OpenAI-compatible HTTP gateway (FastAPI + uvicorn) for Agent Client Protocol (ACP) agents. Each uvicorn worker spawns one ACP agent subprocess (OpenCode `opencode acp`, Cursor `agent acp`, Claude `claude-agent-acp`, Codex `codex-acp`) and talks newline-delimited JSON-RPC 2.0 to it over stdio. Clients call `/v1/models`, `/v1/chat/completions` (JSON or SSE), and `/v1/responses`; `/v1/agent/*` manages agent permissions by editing the agent's native config file inside the workspace.
+ACPBox is an OpenAI-compatible HTTP gateway (FastAPI + uvicorn) for Agent Client Protocol (ACP) agents. Each uvicorn worker spawns one ACP agent subprocess (OpenCode `opencode acp`, Cursor `agent acp`, Claude `claude-agent-acp`, Codex `codex-acp`, Antigravity CLI `agy acp`) and talks newline-delimited JSON-RPC 2.0 to it over stdio. Clients call `/v1/models`, `/v1/chat/completions` (JSON or SSE), and `/v1/responses`; `/v1/agent/*` manages agent permissions by editing the agent's native config file inside the workspace.
 
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
 
 ## Repository Map
 
 - `acpbox/` - the package:
-  - `config.py`, `schemas.py`, `session_store.py`, `acp_stdio.py`, `agents/base.py` - foundation layer, no project imports;
+  - `config.py`, `schemas.py`, `session_store.py`, `request_logger.py`, `acp_stdio.py`, `agents/base.py` - foundation layer, no project imports;
   - `errors.py`, `mapping.py`, `agents/<agent>.py` - translation and agent config adapters;
   - `agents/__init__.py` - agent registry and detection by command basename;
   - `routes/` - thin FastAPI routers (models, chat, responses and sessions, agent_config);
