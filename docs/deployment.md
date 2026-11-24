@@ -14,6 +14,7 @@ Optional env `AGENTS` installs ACP binaries at container startup (comma-separate
 - `cursor` - official script from [cursor.com/install](https://cursor.com/install), `agent` under `/home/user/.local/bin`
 - `claude` - installs `claude-agent-acp` (ACP adapter for Claude Agent SDK) via npm package `@agentclientprotocol/claude-agent-acp` into `/usr/local/bin`
 - `codex` - installs `codex` (Codex CLI) via npm package `@openai/codex` and `codex-acp` (ACP adapter for Codex CLI) via npm package `@zed-industries/codex-acp` into `/usr/local/bin`
+- `agy` - official install script from [antigravity.google/cli/install.sh](https://antigravity.google/cli/install.sh) (`curl -fsSL https://antigravity.google/cli/install.sh | bash`), installs `agy` under `/home/user/.local/bin`
 
 The image runs **acpbox** as user **`user`** (UID 1000, GID 1000); agents install into that home directory. Examples:
 
@@ -22,12 +23,13 @@ docker run --rm -e AGENTS=opencode acpbox
 docker run --rm -e AGENTS=cursor acpbox
 docker run --rm -e AGENTS=claude acpbox
 docker run --rm -e AGENTS=codex acpbox
+docker run --rm -e AGENTS=agy acpbox
 docker run --rm -e AGENTS=opencode,cursor acpbox
 docker run --rm -e AGENTS=opencode,claude acpbox
 docker run --rm -e AGENTS=opencode,codex acpbox
 ```
 
-With Docker Compose, set `AGENTS` in `.env` to install missing agent binaries at container startup. At **runtime**, set `ACPBOX_ACP_COMMAND` to match, e.g. `["opencode","acp"]`, `["agent","acp"]`, `["claude-agent-acp"]`, or `["codex-acp"]`, and provide credentials as required by each agent.
+With Docker Compose, set `AGENTS` in `.env` to install missing agent binaries at container startup. At **runtime**, set `ACPBOX_ACP_COMMAND` to match, e.g. `["opencode","acp"]`, `["agent","acp"]`, `["claude-agent-acp"]`, `["codex-acp"]`, or `["agy","acp"]`, and provide credentials as required by each agent.
 
 If `AGENTS` is empty, the image contains only the Python **acpbox** package and its system dependencies; install an agent in a derived image, set `AGENTS`, or bind-mount a binary.
 
@@ -89,9 +91,9 @@ All options (`ACPBOX_CONFIG_PATH`, `ACPBOX_ACP_*`, `ACPBOX_GATEWAY_*`) can be se
 
 The compose file mounts **`./workspace` from the host to `/workspace` in the container** and sets **`ACPBOX_ACP_WORKSPACE=/workspace`** so ACP `session/new` uses that directory as the agent project root. The repo `workspace/` directory ships a `.gitignore` (`*`, `!.gitignore`) so the folder can be tracked in git without committing local project files. The Dockerfile creates `/workspace` at build time and sets **`ENV ACPBOX_ACP_WORKSPACE=/workspace`** for non-Compose runs.
 
-## Bind-mounting OpenCode and Cursor data (Compose)
+## Bind-mounting agent data (Compose)
 
-The **acpbox** container runs as **`user`** (UID 1000, GID 1000), so in-container paths for OpenCode and Cursor data are under `/home/user`.
+The **acpbox** container runs as **`user`** (UID 1000, GID 1000), so in-container paths for agent data (OpenCode, Cursor, Antigravity CLI) are under `/home/user`.
 
 ### OpenCode
 
@@ -114,6 +116,13 @@ The OpenCode binary in the image lives under `/home/user/.opencode/bin`, so thes
 | **Bind-mount `~/.cursor`** | Optional. Host path → `/home/user/.cursor` in the container. Useful for `mcp.json`, rules, or when you rely on **`agent login`** on the host instead of an API key. Set `CURSOR_DOT_CURSOR_HOST` in `.env`, uncomment the volume in `docker-compose.yaml`. Use read-write if the CLI must update auth files. |
 
 **Do not** bind-mount the host directory `~/.local/share/cursor-agent` onto `/home/user/.local/share/cursor-agent` when the Cursor CLI is **installed inside the image**. The Dockerfile install layout places the agent binary and versioned files there; a host mount would hide that tree and break the `agent` entrypoint.
+
+### Antigravity CLI (`agy`)
+
+Antigravity CLI authenticates with Google OAuth rather than a static API key:
+
+- Run `agy acp --login` once (on the host or inside the container) to complete the interactive OAuth flow.
+- For Docker, bind-mount host `~/.gemini` into `/home/user/.gemini` (read-write so OAuth tokens can refresh) and set `ACPBOX_ACP_COMMAND='["agy","acp"]'`.
 
 ## Environment variables in the container
 

@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from starlette.testclient import TestClient
 
 from acpbox.agents import create_adapter, detect_agent_type
+from acpbox.agents.agy import AgyAdapter
 from acpbox.agents.claude import ClaudeAdapter
 from acpbox.agents.codex import CodexAdapter
 from acpbox.agents.cursor import CursorAdapter
@@ -70,6 +71,12 @@ class TestDetectAgentType:
     def test_cursor(self):
         assert detect_agent_type(["agent", "acp"]) == "cursor"
 
+    def test_agy(self):
+        assert detect_agent_type(["agy", "acp"]) == "agy"
+
+    def test_agy_full_path(self):
+        assert detect_agent_type(["/usr/local/bin/agy", "acp"]) == "agy"
+
     def test_full_path(self):
         assert detect_agent_type(["/usr/local/bin/opencode", "acp"]) == "opencode"
 
@@ -97,6 +104,16 @@ class TestCreateAdapter:
     def test_cursor(self):
         a = create_adapter(["agent", "acp"], "/tmp/ws")
         assert isinstance(a, CursorAdapter)
+
+    def test_agy(self):
+        a = create_adapter(["agy", "acp"], "/tmp/ws")
+        assert isinstance(a, AgyAdapter)
+        assert a.agent_type == "agy"
+
+    def test_agy_full_path(self):
+        a = create_adapter(["/usr/local/bin/agy", "acp"], "/tmp/ws")
+        assert isinstance(a, AgyAdapter)
+        assert a.agent_type == "agy"
 
     def test_full_path_binary(self):
         a = create_adapter(["/home/user/.local/bin/opencode", "acp"], "/tmp/ws")
@@ -314,6 +331,180 @@ class TestCursorAdapterUnit:
 
 
 # ===================================================================
+# Antigravity CLI (agy) adapter - unit
+# ===================================================================
+
+class TestAgyAdapterUnit:
+    def test_config_path(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        assert a.config_path == tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
+
+    def test_read_missing_config(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        assert a.read_config() == {}
+        assert a.get_permissions() == {}
+
+    def test_set_creates_sorted_allow_ask_deny_lists(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        a.set_permissions({
+            "read_file(*)": "allow",
+            "command(git)": "allow",
+            "command(*)": "ask",
+            "write_file(*)": "ask",
+            "command(rm -rf)": "deny",
+            "execute_url(*)": "deny",
+        })
+        cfg = json.loads(a.config_path.read_text())
+        assert cfg["permissions"] == {
+            "allow": ["command(git)", "read_file(*)"],
+            "ask": ["command(*)", "write_file(*)"],
+            "deny": ["command(rm -rf)", "execute_url(*)"],
+        }
+
+    def test_roundtrip(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        original = {
+            "read_file(*)": "allow",
+            "command(*)": "ask",
+            "command(rm -rf)": "deny",
+        }
+        a.set_permissions(original)
+        assert a.get_permissions() == original
+
+    def test_precedence_deny_over_ask_over_allow(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        a.write_config({
+            "permissions": {
+                "allow": ["read_file(*)", "command(*)", "write_file(*)"],
+                "ask": ["command(*)", "write_file(*)"],
+                "deny": ["write_file(*)"],
+            },
+        })
+        assert a.get_permissions() == {
+            "read_file(*)": "allow",
+            "command(*)": "ask",
+            "write_file(*)": "deny",
+        }
+
+    def test_pattern_keys_preserved(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        patterns = {
+            "command(git *)": "allow",
+            "write_file(src/)": "ask",
+            "read_file(.env)": "deny",
+            "mcp(linter/*)": "allow",
+        }
+        a.set_permissions(patterns)
+        assert a.get_permissions() == patterns
+        cfg = json.loads(a.config_path.read_text())
+        assert cfg["permissions"] == {
+            "allow": ["command(git *)", "mcp(linter/*)"],
+            "ask": ["write_file(src/)"],
+            "deny": ["read_file(.env)"],
+        }
+
+    def test_update_merges_and_moves_between_lists(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        a.set_permissions({"read_file(*)": "allow", "command(*)": "allow"})
+        result = a.update_permissions({"command(*)": "ask", "write_file(*)": "deny"})
+        assert result == {
+            "read_file(*)": "allow",
+            "command(*)": "ask",
+            "write_file(*)": "deny",
+        }
+        cfg = json.loads(a.config_path.read_text())
+        assert cfg["permissions"] == {
+            "allow": ["read_file(*)"],
+            "ask": ["command(*)"],
+            "deny": ["write_file(*)"],
+        }
+        result2 = a.update_permissions({"read_file(*)": "deny"})
+        assert result2["read_file(*)"] == "deny"
+        cfg2 = json.loads(a.config_path.read_text())
+        assert cfg2["permissions"]["allow"] == []
+        assert "read_file(*)" in cfg2["permissions"]["deny"]
+
+    def test_preserves_non_permission_keys(self, tmp_path: Path):
+        cfg_dir = tmp_path / ".gemini" / "antigravity-cli"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "settings.json").write_text(json.dumps({
+            "model": "gemini-2.5-pro",
+            "agentMode": "code",
+        }))
+        a = AgyAdapter(str(tmp_path))
+        a.set_permissions({"read_file(*)": "allow"})
+        cfg = json.loads(a.config_path.read_text())
+        assert cfg["model"] == "gemini-2.5-pro"
+        assert cfg["agentMode"] == "code"
+        assert cfg["permissions"]["allow"] == ["read_file(*)"]
+
+    def test_known_permissions(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        assert a.known_permissions() == [
+            "read_file(*)",
+            "write_file(*)",
+            "command(*)",
+            "read_url(*)",
+            "execute_url(*)",
+            "mcp(*)",
+        ]
+
+    def test_allowed_values(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        assert a.allowed_values() == ["allow", "deny", "ask"]
+
+    def test_apply_preset_allow_all(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        result = a.apply_preset("allow_all")
+        assert all(v == "allow" for v in result.values())
+        assert set(result.keys()) == set(a.known_permissions())
+
+    def test_apply_preset_deny_all(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        result = a.apply_preset("deny_all")
+        assert all(v == "deny" for v in result.values())
+        assert set(result.keys()) == set(a.known_permissions())
+
+    def test_apply_preset_ask_all(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        result = a.apply_preset("ask_all")
+        assert all(v == "ask" for v in result.values())
+        assert set(result.keys()) == set(a.known_permissions())
+
+    def test_apply_preset_unknown_raises(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        with pytest.raises(ValueError, match="Unknown preset"):
+            a.apply_preset("nope")
+
+    def test_set_replaces_previous_permissions(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        a.set_permissions({"read_file(*)": "allow", "command(*)": "ask"})
+        result = a.set_permissions({"command(rm -rf)": "deny"})
+        assert result == {"command(rm -rf)": "deny"}
+        assert a.get_permissions() == {"command(rm -rf)": "deny"}
+
+    def test_update_preserves_non_permission_keys(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        a.write_config({"model": "gemini-2.5-pro", "permissions": {"allow": ["read_file(*)"]}})
+        a.update_permissions({"command(*)": "ask"})
+        cfg = json.loads(a.config_path.read_text())
+        assert cfg["model"] == "gemini-2.5-pro"
+        assert cfg["permissions"] == {"allow": ["read_file(*)"], "ask": ["command(*)"], "deny": []}
+
+    def test_null_permissions_and_lists_handled_safely(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        a.write_config({"permissions": None})
+        assert a.get_permissions() == {}
+        a.write_config({"permissions": {"allow": None, "ask": ["command(*)"], "deny": None}})
+        assert a.get_permissions() == {"command(*)": "ask"}
+
+    def test_invalid_value_raises_value_error(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        with pytest.raises(ValueError, match="Invalid permission value"):
+            a.set_permissions({"command(*)": "yolo"})
+
+
+# ===================================================================
 # is_writable
 # ===================================================================
 
@@ -350,6 +541,11 @@ class TestWritability:
     def test_writable_nested_nonexistent_parent(self, tmp_path: Path):
         a = ClaudeAdapter(str(tmp_path))
         # .claude/ dir doesn't exist yet but tmp_path is writable
+        assert a.is_writable is True
+
+    def test_writable_two_level_nonexistent_parent_agy(self, tmp_path: Path):
+        a = AgyAdapter(str(tmp_path))
+        # .gemini/antigravity-cli/ dirs do not exist yet but tmp_path is writable
         assert a.is_writable is True
 
 
@@ -622,6 +818,94 @@ class TestCursorAPI:
         })
         r = cursor_client.get("/v1/agent/permissions")
         assert r.json()["permissions"] == {"read": "allow", "bash": "deny"}
+
+
+# ===================================================================
+# API - Antigravity CLI (agy) endpoints
+# ===================================================================
+
+@pytest.fixture
+def agy_workspace(tmp_path: Path) -> Path:
+    return tmp_path
+
+
+@pytest.fixture
+def agy_client(agy_workspace: Path) -> TestClient:
+    adapter = AgyAdapter(str(agy_workspace))
+    with _client(adapter) as c:
+        yield c
+
+
+class TestAgyAPI:
+    def test_get_info(self, agy_client: TestClient):
+        r = agy_client.get("/v1/agent")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["agent_type"] == "agy"
+        assert d["writable"] is True
+        assert d["allowed_values"] == ["allow", "deny", "ask"]
+        assert d["known_permissions"] == [
+            "read_file(*)",
+            "write_file(*)",
+            "command(*)",
+            "read_url(*)",
+            "execute_url(*)",
+            "mcp(*)",
+        ]
+        assert d["config_path"].endswith(".gemini/antigravity-cli/settings.json")
+
+    def test_put_explicit_and_native_format(self, agy_workspace: Path, agy_client: TestClient):
+        r = agy_client.put("/v1/agent/permissions", json={
+            "permissions": {
+                "read_file(*)": "allow",
+                "command(*)": "ask",
+                "command(rm -rf)": "deny",
+            },
+        })
+        assert r.status_code == 200
+        assert r.json()["permissions"] == {
+            "read_file(*)": "allow",
+            "command(*)": "ask",
+            "command(rm -rf)": "deny",
+        }
+        cfg = json.loads((agy_workspace / ".gemini" / "antigravity-cli" / "settings.json").read_text())
+        assert cfg["permissions"] == {
+            "allow": ["read_file(*)"],
+            "ask": ["command(*)"],
+            "deny": ["command(rm -rf)"],
+        }
+
+    def test_put_preset_ask_all(self, agy_client: TestClient):
+        r = agy_client.put("/v1/agent/permissions", json={"preset": "ask_all"})
+        assert r.status_code == 200
+        p = r.json()["permissions"]
+        assert all(v == "ask" for v in p.values())
+        assert "read_file(*)" in p
+
+    def test_put_preset_allow_all(self, agy_client: TestClient):
+        r = agy_client.put("/v1/agent/permissions", json={"preset": "allow_all"})
+        assert r.status_code == 200
+        p = r.json()["permissions"]
+        assert all(v == "allow" for v in p.values())
+        assert "command(*)" in p
+
+    def test_patch_merges(self, agy_client: TestClient):
+        agy_client.put("/v1/agent/permissions", json={"preset": "deny_all"})
+        r = agy_client.patch("/v1/agent/permissions", json={
+            "permissions": {"read_file(*)": "allow", "command(*)": "ask"},
+        })
+        assert r.status_code == 200
+        p = r.json()["permissions"]
+        assert p["read_file(*)"] == "allow"
+        assert p["command(*)"] == "ask"
+        assert p["write_file(*)"] == "deny"
+
+    def test_invalid_value_rejected(self, agy_client: TestClient):
+        r = agy_client.put("/v1/agent/permissions", json={
+            "permissions": {"command(*)": "yolo"},
+        })
+        assert r.status_code == 422
+        assert "invalid_permission_value" in r.json()["error"]["code"]
 
 
 # ===================================================================
