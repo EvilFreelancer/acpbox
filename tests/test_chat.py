@@ -346,18 +346,8 @@ def test_chat_completion_stream_tool_calls_split_chunks(client, monkeypatch):
         },
     ) as r:
         assert r.status_code == 200
-        raw_lines = [
-            line.decode("utf-8") if isinstance(line, (bytes, bytearray)) else line
-            for line in r.iter_lines()
-            if line
-        ]
+        parts = _parse_sse_chat_chunks(r)
 
-    assert any(line.strip() == "data: [DONE]" for line in raw_lines)
-    parts = [
-        json.loads(line[len("data: ") :])
-        for line in raw_lines
-        if line.startswith("data: ") and line[len("data: ") :].strip() != "[DONE]"
-    ]
     assert parts[0]["choices"][0]["delta"] == {"role": "assistant"}
     content_text = "".join((c["choices"][0]["delta"].get("content") or "") for c in parts)
     assert "<acpbox_tool_call>" not in content_text
@@ -549,6 +539,7 @@ def test_chat_completion_forced_tool_choice_rejects_other_declared_tools(client,
     assert r.status_code == 200
     choice = r.json()["choices"][0]
     assert choice["finish_reason"] == "tool_calls"
+    assert choice["message"]["content"] is None
     assert [tc["function"]["name"] for tc in choice["message"]["tool_calls"]] == ["get_document"]
 
     with client.stream(
@@ -610,3 +601,33 @@ def test_chat_completion_stream_parallel_tool_calls_suppress_inter_call_whitespa
     ]
     assert [tc["index"] for tc in emitted_calls] == [0, 1]
     assert [tc["function"]["name"] for tc in emitted_calls] == ["list_documents", "get_document"]
+
+
+def test_chat_completion_forced_tool_choice_unknown_tool_returns_400(client, monkeypatch):
+    """Forced tool_choice naming a tool absent from tools returns 400 invalid_input before calling runner."""
+    called = False
+
+    async def _fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runner should not be called")
+
+    monkeypatch.setattr(client.app.state.runner, "run_turn", _fail_if_called)
+    monkeypatch.setattr(client.app.state.runner, "run_turn_stream", _fail_if_called)
+
+    for stream_flag in (False, True):
+        r = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "my-agent",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "tools": _TEST_TOOLS,
+                "tool_choice": {"type": "function", "function": {"name": "not_declared"}},
+                "stream": stream_flag,
+            },
+        )
+        assert r.status_code == 400
+        err = r.json()["error"]
+        assert err["code"] == "invalid_input"
+        assert "not_declared" in err["message"]
+    assert called is False

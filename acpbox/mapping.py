@@ -20,66 +20,30 @@ from acpbox.schemas import (
     Usage,
 )
 
-# gpt-oss (Harmony) may leak channel markers into tool titles, e.g.
-# "atlassian_confluence_search<|channel|>commentary". Strip for API summaries.
-_HARMONY_TOOL_TITLE_SUFFIX = re.compile(r"<\|channel\|>.*$", re.DOTALL)
-
 TOOL_CALL_OPEN_TAG = "<acpbox_tool_call>"
 TOOL_CALL_CLOSE_TAG = "</acpbox_tool_call>"
 
+# gpt-oss (Harmony) may leak channel markers into tool titles, e.g.
+# "atlassian_confluence_search<|channel|>commentary". Strip for API summaries.
+_HARMONY_TOOL_TITLE_SUFFIX = re.compile(r"<\|channel\|>.*$", re.DOTALL)
 _PARTIAL_NUMBER_TAIL_RE = re.compile(r"^(?:-|\.|[eE][+-]?)$")
 _PARTIAL_UNICODE_ESCAPE_RE = re.compile(r"^u[0-9a-fA-F]{0,3}$")
 
 
-def sanitize_acp_tool_title(title: str | None) -> str | None:
-    """Remove Harmony <|channel|>... suffix from ACP tool titles when present."""
-    if not title or not isinstance(title, str):
-        return title
-    cleaned = _HARMONY_TOOL_TITLE_SUFFIX.sub("", title).strip()
-    return cleaned if cleaned else title
-
-
-def has_active_tools(
-    tools: list[dict[str, Any]] | None,
-    tool_choice: str | dict[str, Any] | None,
-) -> bool:
-    """Return True when external client tools are declared and not disabled via tool_choice='none'."""
-    return bool(tools) and tool_choice != "none"
-
-
-def resolve_allowed_tool_names(
-    tools: list[dict[str, Any]] | None,
-    tool_choice: str | dict[str, Any] | None,
-) -> set[str] | None:
-    """Resolve the set of allowed tool names for a request, or None when tool bridging is inactive."""
-    if not has_active_tools(tools, tool_choice):
+def _forced_tool_name(tool_choice: str | dict[str, Any] | None) -> str | None:
+    """Extract the forced function name from an OpenAI tool_choice object, if any."""
+    if not isinstance(tool_choice, dict):
         return None
-    declared: set[str] = set()
-    for tool in tools or []:
-        if not isinstance(tool, dict):
-            continue
-        fn = tool.get("function")
-        if isinstance(fn, dict):
-            name = fn.get("name")
-            if isinstance(name, str) and name:
-                declared.add(name)
-    if not declared:
-        return None
-    if isinstance(tool_choice, dict):
-        fn = tool_choice.get("function")
-        forced_name = fn.get("name") if isinstance(fn, dict) else None
-        if isinstance(forced_name, str) and forced_name:
-            return {forced_name} if forced_name in declared else set()
-    return declared
+    fn = tool_choice.get("function")
+    forced_name = fn.get("name") if isinstance(fn, dict) else None
+    return forced_name if isinstance(forced_name, str) and forced_name else None
 
 
 def _format_tool_choice_policy(tool_choice: str | dict[str, Any] | None) -> str:
     """Describe the OpenAI tool_choice policy in clear natural language."""
-    if isinstance(tool_choice, dict):
-        fn = tool_choice.get("function")
-        forced_name = fn.get("name") if isinstance(fn, dict) else None
-        if isinstance(forced_name, str) and forced_name:
-            return f'You MUST call the external tool "{forced_name}" before answering.'
+    forced_name = _forced_tool_name(tool_choice)
+    if forced_name:
+        return f'You MUST call the external tool "{forced_name}" before answering.'
     if tool_choice == "required":
         return "You MUST call at least one of the external tools below before answering."
     return (
@@ -193,75 +157,61 @@ def _longest_tag_prefix_suffix(text: str, tag: str) -> int:
     return 0
 
 
-def extract_tool_calls_from_text(
+def _try_decode_tool_call_block(
     text: str,
-    allowed_tool_names: set[str] | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
-    """Extract valid <acpbox_tool_call> blocks from text and return (remaining_text, tool_calls)."""
-    if not text or TOOL_CALL_OPEN_TAG not in text:
-        return (text, [])
-
-    decoder = json.JSONDecoder()
-    marker = f"\x00ACPBOX_REMOVED_{uuid.uuid4().hex}\x00"
-    out_parts: list[str] = []
-    tool_calls: list[dict[str, Any]] = []
-    pos = 0
+    after_open_idx: int,
+    decoder: json.JSONDecoder,
+) -> tuple[Literal["complete", "incomplete", "not_json", "bad_json", "no_close"], Any, int]:
+    """Decode JSON payload and closing tag starting immediately after TOOL_CALL_OPEN_TAG."""
     text_len = len(text)
+    ws_end = after_open_idx
+    while ws_end < text_len and text[ws_end].isspace():
+        ws_end += 1
 
-    while pos < text_len:
-        open_idx = text.find(TOOL_CALL_OPEN_TAG, pos)
-        if open_idx == -1:
-            out_parts.append(text[pos:])
-            break
+    if ws_end >= text_len:
+        return ("incomplete", None, after_open_idx)
 
-        after_open = open_idx + len(TOOL_CALL_OPEN_TAG)
-        ws_end = after_open
-        while ws_end < text_len and text[ws_end].isspace():
-            ws_end += 1
+    if text[ws_end] not in "{[":
+        return ("not_json", None, after_open_idx)
 
-        if ws_end >= text_len or text[ws_end] not in "{[":
-            out_parts.append(text[pos:after_open])
-            pos = after_open
-            continue
+    try:
+        parsed, json_end = decoder.raw_decode(text, ws_end)
+    except json.JSONDecodeError as err:
+        if _is_possibly_incomplete_json(text, err):
+            return ("incomplete", err, after_open_idx)
+        return ("bad_json", err, after_open_idx)
 
-        try:
-            parsed, json_end = decoder.raw_decode(text, ws_end)
-        except json.JSONDecodeError:
-            out_parts.append(text[pos:after_open])
-            pos = after_open
-            continue
+    close_start = json_end
+    while close_start < text_len and text[close_start].isspace():
+        close_start += 1
 
-        close_start = json_end
-        while close_start < text_len and text[close_start].isspace():
-            close_start += 1
+    rem = text[close_start:]
+    if rem.startswith(TOOL_CALL_CLOSE_TAG):
+        return ("complete", parsed, close_start + len(TOOL_CALL_CLOSE_TAG))
 
-        if not text.startswith(TOOL_CALL_CLOSE_TAG, close_start):
-            out_parts.append(text[pos:after_open])
-            pos = after_open
-            continue
+    if TOOL_CALL_CLOSE_TAG.startswith(rem):
+        return ("incomplete", None, after_open_idx)
 
-        parsed_calls = _build_tool_calls_from_parsed(parsed, allowed_tool_names)
-        if not parsed_calls:
-            out_parts.append(text[pos:after_open])
-            pos = after_open
-            continue
+    return ("no_close", None, after_open_idx)
 
-        out_parts.append(text[pos:open_idx])
-        out_parts.append(marker)
-        tool_calls.extend(parsed_calls)
-        pos = close_start + len(TOOL_CALL_CLOSE_TAG)
 
-    if not tool_calls:
-        return (text, [])
+def _apply_metadata_model_prefix(text: str, metadata: dict[str, Any] | None) -> str:
+    """
+    Apply metadata model prefix for opencode.
 
-    remaining = "".join(out_parts)
-    fence_with_markers = re.compile(
-        rf"```[a-zA-Z0-9_-]*[ \t]*\r?\n(?:[\s]*{re.escape(marker)})+[\s]*```",
-    )
-    remaining = fence_with_markers.sub("", remaining)
-    remaining = remaining.replace(marker, "")
-    remaining = re.sub(r"\n{3,}", "\n\n", remaining).strip()
-    return (remaining, tool_calls)
+    If metadata contains key "model" (for example from OpenAI metadata field),
+    prepend a line "model: <value>" before the main prompt text so the ACP
+    agent (opencode) can choose underlying LLM model.
+    """
+    if not metadata:
+        return text
+    model_value = metadata.get("model")
+    if not model_value:
+        return text
+    prefix = f"model: {model_value}"
+    if not text:
+        return prefix
+    return f"{prefix}\n\n{text}"
 
 
 class StreamingToolCallParser:
@@ -327,24 +277,14 @@ class StreamingToolCallParser:
                     self._buf = self._buf[emit_len:]
                 break
 
-            buf_len = len(self._buf)
-            ws_end = 0
-            while ws_end < buf_len and self._buf[ws_end].isspace():
-                ws_end += 1
-
-            if ws_end == buf_len:
+            status, payload, end_idx = _try_decode_tool_call_block(self._buf, 0, self._decoder)
+            if status == "incomplete":
                 break
-
-            if self._buf[ws_end] not in "{[":
+            if status in ("not_json", "no_close"):
                 self._emit_text(TOOL_CALL_OPEN_TAG, events)
                 self._in_tag = False
                 continue
-
-            try:
-                parsed, json_end = self._decoder.raw_decode(self._buf, ws_end)
-            except json.JSONDecodeError as err:
-                if _is_possibly_incomplete_json(self._buf, err):
-                    break
+            if status == "bad_json":
                 close_idx = self._buf.find(TOOL_CALL_CLOSE_TAG)
                 next_open_idx = self._buf.find(TOOL_CALL_OPEN_TAG)
                 if close_idx != -1 and (next_open_idx == -1 or close_idx < next_open_idx):
@@ -359,27 +299,14 @@ class StreamingToolCallParser:
                     continue
                 break
 
-            close_start = json_end
-            while close_start < buf_len and self._buf[close_start].isspace():
-                close_start += 1
-
-            rem = self._buf[close_start:]
-            if rem.startswith(TOOL_CALL_CLOSE_TAG):
-                self._buf = self._buf[close_start + len(TOOL_CALL_CLOSE_TAG) :]
-                self._in_tag = False
-                calls = _build_tool_calls_from_parsed(parsed, self._allowed_tool_names)
-                if calls:
-                    self._emit_tool_calls(calls, events)
-                else:
-                    self._held_ws = ""
-                    self._after_tool_call = True
-                continue
-
-            if TOOL_CALL_CLOSE_TAG.startswith(rem):
-                break
-
-            self._emit_text(TOOL_CALL_OPEN_TAG, events)
+            self._buf = self._buf[end_idx:]
             self._in_tag = False
+            calls = _build_tool_calls_from_parsed(payload, self._allowed_tool_names)
+            if calls:
+                self._emit_tool_calls(calls, events)
+            else:
+                self._held_ws = ""
+                self._after_tool_call = True
 
         return events
 
@@ -397,23 +324,93 @@ class StreamingToolCallParser:
         return events
 
 
-def _apply_metadata_model_prefix(text: str, metadata: dict[str, Any] | None) -> str:
-    """
-    Apply metadata model prefix for opencode.
+def has_active_tools(
+    tools: list[dict[str, Any]] | None,
+    tool_choice: str | dict[str, Any] | None,
+) -> bool:
+    """Return True when at least one declared external client tool is allowed for this request."""
+    return bool(resolve_allowed_tool_names(tools, tool_choice))
 
-    If metadata contains key "model" (for example from OpenAI metadata field),
-    prepend a line "model: <value>" before the main prompt text so the ACP
-    agent (opencode) can choose underlying LLM model.
-    """
-    if not metadata:
-        return text
-    model_value = metadata.get("model")
-    if not model_value:
-        return text
-    prefix = f"model: {model_value}"
-    if not text:
-        return prefix
-    return f"{prefix}\n\n{text}"
+
+def resolve_allowed_tool_names(
+    tools: list[dict[str, Any]] | None,
+    tool_choice: str | dict[str, Any] | None,
+) -> set[str] | None:
+    """Resolve the set of allowed tool names for a request, or None when tool bridging is inactive."""
+    if not tools or tool_choice == "none":
+        return None
+    declared: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if isinstance(fn, dict):
+            name = fn.get("name")
+            if isinstance(name, str) and name:
+                declared.add(name)
+    if not declared:
+        return None
+    forced_name = _forced_tool_name(tool_choice)
+    if forced_name:
+        return {forced_name} if forced_name in declared else set()
+    return declared
+
+
+def extract_tool_calls_from_text(
+    text: str,
+    allowed_tool_names: set[str] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Extract valid <acpbox_tool_call> blocks from text and return (remaining_text, tool_calls)."""
+    if not text or TOOL_CALL_OPEN_TAG not in text:
+        return (text, [])
+
+    decoder = json.JSONDecoder()
+    marker = f"\x00ACPBOX_REMOVED_{uuid.uuid4().hex}\x00"
+    out_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    removed_any = False
+    pos = 0
+    text_len = len(text)
+
+    while pos < text_len:
+        open_idx = text.find(TOOL_CALL_OPEN_TAG, pos)
+        if open_idx == -1:
+            out_parts.append(text[pos:])
+            break
+
+        after_open = open_idx + len(TOOL_CALL_OPEN_TAG)
+        status, parsed, end_idx = _try_decode_tool_call_block(text, after_open, decoder)
+        if status != "complete":
+            out_parts.append(text[pos:after_open])
+            pos = after_open
+            continue
+
+        parsed_calls = _build_tool_calls_from_parsed(parsed, allowed_tool_names)
+        out_parts.append(text[pos:open_idx])
+        out_parts.append(marker)
+        removed_any = True
+        tool_calls.extend(parsed_calls)
+        pos = end_idx
+
+    if not removed_any:
+        return (text, [])
+
+    remaining = "".join(out_parts)
+    fence_with_markers = re.compile(
+        rf"```[a-zA-Z0-9_-]*[ \t]*\r?\n(?:[\s]*{re.escape(marker)})+[\s]*```",
+    )
+    remaining = fence_with_markers.sub("", remaining)
+    remaining = remaining.replace(marker, "")
+    remaining = re.sub(r"\n{3,}", "\n\n", remaining).strip()
+    return (remaining, tool_calls)
+
+
+def sanitize_acp_tool_title(title: str | None) -> str | None:
+    """Remove Harmony <|channel|>... suffix from ACP tool titles when present."""
+    if not title or not isinstance(title, str):
+        return title
+    cleaned = _HARMONY_TOOL_TITLE_SUFFIX.sub("", title).strip()
+    return cleaned if cleaned else title
 
 
 def openai_messages_to_acp_prompt_blocks(
@@ -593,7 +590,9 @@ def openai_response_input_to_acp_input(input_value: str | list[dict[str, Any]]) 
     return acp_messages
 
 
-def acp_stop_reason_to_openai_finish(stop_reason: str) -> str:
+def acp_stop_reason_to_openai_finish(
+    stop_reason: str,
+) -> Literal["stop", "length", "content_filter", "tool_calls"]:
     """Map ACP session/prompt stopReason to OpenAI chat finish_reason (chunk field)."""
     if stop_reason in ("end_turn",):
         return "stop"
@@ -732,18 +731,16 @@ def acp_aggregated_text_to_chat_completion(
     """Build OpenAI chat.completion from ACP stdio aggregated agent text."""
     tool_calls: list[ChatCompletionMessageToolCall] | None = None
     content: str | None = aggregated_text or None
-    resolved_finish: Literal["stop", "length", "content_filter", "tool_calls"] = (
-        "stop" if finish_reason == "end_turn" else "stop"
-    )
+    resolved_finish = acp_stop_reason_to_openai_finish(finish_reason)
 
     if allowed_tool_names is not None:
         remaining_text, extracted = extract_tool_calls_from_text(
             aggregated_text,
             allowed_tool_names=allowed_tool_names,
         )
+        content = remaining_text or None
         if extracted:
             tool_calls = [ChatCompletionMessageToolCall(**tc) for tc in extracted]
-            content = remaining_text or None
             resolved_finish = "tool_calls"
 
     choice = ChatCompletionChoice(

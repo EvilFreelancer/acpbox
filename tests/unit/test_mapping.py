@@ -401,6 +401,13 @@ class TestHasActiveTools:
             {"type": "function", "function": {"name": "list_documents"}},
         ) is True
 
+    def test_false_when_forced_tool_choice_is_undeclared(self):
+        """has_active_tools returns False when forced tool_choice names an undeclared tool."""
+        assert has_active_tools(
+            SAMPLE_TOOLS,
+            {"type": "function", "function": {"name": "not_declared"}},
+        ) is False
+
 
 class TestResolveAllowedToolNames:
     def test_returns_none_when_inactive(self):
@@ -473,6 +480,17 @@ class TestPromptBlocksWithTools:
         )
         assert len(out) == 1
         assert out[0].text == "user: Hi"
+
+    def test_tools_undeclared_forced_choice_skips_bridge_instructions(self):
+        """Undeclared forced tool_choice skips contradictory tool bridge instructions."""
+        out = openai_messages_to_acp_prompt_blocks(
+            [{"role": "user", "content": "Hi"}],
+            tools=SAMPLE_TOOLS,
+            tool_choice={"type": "function", "function": {"name": "not_declared"}},
+        )
+        assert len(out) == 1
+        assert out[0].text == "user: Hi"
+        assert "You MUST call" not in out[0].text
 
     def test_metadata_model_stays_on_first_line_with_tools(self):
         """metadata.model remains on line 1 even when tool bridge instructions are prepended."""
@@ -596,19 +614,33 @@ class TestExtractToolCallsFromText:
         assert len(calls) == 2
         assert calls[1]["function"]["arguments"] == '{"id": "7"}'
 
-    def test_unknown_tool_name_filtered_out(self):
-        """Filters out tool calls whose name is not in allowed_tool_names."""
+    def test_unknown_tool_name_filtered_out_and_stripped(self):
+        """Filters out and strips valid tagged tool call blocks whose name is not allowed."""
         raw = f'{TOOL_CALL_OPEN_TAG}{{"name": "delete_everything", "arguments": {{}}}}{TOOL_CALL_CLOSE_TAG}'
         remaining, calls = extract_tool_calls_from_text(raw, {"list_documents"})
         assert calls == []
-        assert remaining == raw
+        assert remaining == ""
+        assert TOOL_CALL_OPEN_TAG not in remaining
 
-    def test_malformed_json_ignored_safely(self):
-        """Malformed JSON inside tool call tags does not raise and yields no tool calls."""
+        with_prose = (
+            "Checking.\n\n"
+            f'{TOOL_CALL_OPEN_TAG}{{"name": "delete_everything", "arguments": {{}}}}{TOOL_CALL_CLOSE_TAG}'
+        )
+        remaining_prose, calls_prose = extract_tool_calls_from_text(with_prose, {"list_documents"})
+        assert calls_prose == []
+        assert remaining_prose == "Checking."
+
+    def test_malformed_and_unclosed_tags_remain_plain_text(self):
+        """Malformed JSON or unclosed tool call tags remain untouched as plain text."""
         raw = f"Oops {TOOL_CALL_OPEN_TAG}{{bad json{TOOL_CALL_CLOSE_TAG}"
         remaining, calls = extract_tool_calls_from_text(raw, {"list_documents"})
         assert calls == []
         assert remaining == raw
+
+        unclosed = f'Prefix {TOOL_CALL_OPEN_TAG}{{"name": "list_documents", "arguments": {{}}'
+        remaining_unclosed, calls_unclosed = extract_tool_calls_from_text(unclosed, {"list_documents"})
+        assert calls_unclosed == []
+        assert remaining_unclosed == unclosed
 
     def test_markdown_fence_around_tag_stripped_without_breaking_code_blocks(self):
         """Strips accidental markdown fences around a tool call while keeping unrelated code blocks."""
@@ -681,7 +713,7 @@ class TestExtractToolCallsFromText:
         )
         remaining_bad, calls_bad = extract_tool_calls_from_text(raw_bad, {"list_documents"})
         assert calls_bad == []
-        assert remaining_bad == raw_bad
+        assert remaining_bad == ""
 
 
 class TestStreamingToolCallParser:
@@ -867,3 +899,30 @@ class TestAcpAggregatedTextToChatCompletionToolCalls:
         dumped_msg = resp.model_dump()["choices"][0]["message"]
         assert dumped_msg == {"role": "assistant", "content": raw}
         assert "tool_calls" not in dumped_msg
+
+    def test_rejected_tool_call_block_is_stripped_from_content(self):
+        """Valid tagged tool call blocks rejected by allowed_tool_names never leak into message.content."""
+        raw = (
+            "Unable to run that.\n"
+            f'{TOOL_CALL_OPEN_TAG}{{"name": "delete_everything", "arguments": {{}}}}{TOOL_CALL_CLOSE_TAG}'
+        )
+        resp = acp_aggregated_text_to_chat_completion(
+            raw,
+            "my-model",
+            allowed_tool_names={"list_documents"},
+        )
+        choice = resp.choices[0]
+        assert choice.finish_reason == "stop"
+        assert choice.message.tool_calls is None
+        assert choice.message.content == "Unable to run that."
+        assert TOOL_CALL_OPEN_TAG not in (choice.message.content or "")
+
+        raw_only = f'{TOOL_CALL_OPEN_TAG}{{"name": "delete_everything", "arguments": {{}}}}{TOOL_CALL_CLOSE_TAG}'
+        resp_only = acp_aggregated_text_to_chat_completion(
+            raw_only,
+            "my-model",
+            allowed_tool_names={"list_documents"},
+        )
+        assert resp_only.choices[0].finish_reason == "stop"
+        assert resp_only.choices[0].message.tool_calls is None
+        assert resp_only.choices[0].message.content is None
