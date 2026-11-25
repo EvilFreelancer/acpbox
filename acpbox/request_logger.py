@@ -3,6 +3,7 @@
 import contextvars
 import json
 import logging
+import queue
 import re
 import threading
 from datetime import datetime, timezone
@@ -107,10 +108,54 @@ def _detect_acp_tool_kind(message: dict[str, Any]) -> str | None:
 class RequestLogger:
     """Thread- and process-safe JSONL writer correlating HTTP requests/responses with ACP JSON-RPC traffic."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, background: bool = False) -> None:
         self.path = Path(path).expanduser().resolve()
         self._lock = threading.Lock()
+        self._queue_lock = threading.Lock()
         self._dir_ready = False
+        self._closed = False
+        self._queue: queue.Queue[str | None] | None = None
+        self._worker: threading.Thread | None = None
+        if background:
+            self._queue = queue.Queue()
+            self._worker = threading.Thread(
+                target=self._worker_loop,
+                name="acpbox-request-logger",
+                daemon=True,
+            )
+            self._worker.start()
+
+    def _worker_loop(self) -> None:
+        assert self._queue is not None
+        while True:
+            line = self._queue.get()
+            try:
+                if line is None:
+                    return
+                try:
+                    with self._lock:
+                        self._write_line(line)
+                except Exception as e:
+                    logger.warning("Failed to write request log event to %s: %s", self.path, e)
+            finally:
+                self._queue.task_done()
+
+    def flush(self) -> None:
+        """Wait until all queued background log lines have been written to disk."""
+        if self._queue is not None:
+            self._queue.join()
+
+    def close(self) -> None:
+        """Drain queued background log lines and stop the writer thread cleanly."""
+        if self._queue is None or self._worker is None:
+            return
+        with self._queue_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._queue.put(None)
+        self._queue.join()
+        self._worker.join(timeout=5.0)
 
     def _write_line(self, line: str) -> None:
         if not self._dir_ready:
@@ -152,6 +197,11 @@ class RequestLogger:
                 .replace("\u2029", "\\u2029")
                 + "\n"
             )
+            if self._queue is not None:
+                with self._queue_lock:
+                    if not self._closed:
+                        self._queue.put(line)
+                        return
             with self._lock:
                 self._write_line(line)
         except Exception as e:

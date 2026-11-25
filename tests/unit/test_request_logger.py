@@ -330,3 +330,39 @@ class TestRequestLogger:
         )
         rec = _read_jsonl(log_path)[0]
         assert rec["sse_events"] == [chunk_with_u2028, {"a": 1}]
+
+    def test_background_mode_writes_flushes_and_closes_cleanly(self, tmp_path: Path) -> None:
+        """background=True queues records onto a daemon writer thread and drains them on flush/close."""
+        log_path = tmp_path / "bg.jsonl"
+        req_logger = RequestLogger(log_path, background=True)
+        try:
+            for idx in range(5):
+                req_logger.write_event("http_request", {"seq": idx}, request_id=f"req-{idx}")
+            req_logger.flush()
+            records = _read_jsonl(log_path)
+            assert [r["seq"] for r in records] == [0, 1, 2, 3, 4]
+            req_logger.write_event("http_response", {"seq": 5}, request_id="req-5")
+        finally:
+            req_logger.close()
+            # Calling close() a second time is a safe no-op.
+            req_logger.close()
+
+        all_records = _read_jsonl(log_path)
+        assert [r["seq"] for r in all_records] == [0, 1, 2, 3, 4, 5]
+
+    def test_background_mode_handles_os_error_without_hanging(
+        self,
+        tmp_path: Path,
+        caplog: Any,
+    ) -> None:
+        """Background writer logs a warning on OSError and still allows flush/close to return."""
+        dir_path = tmp_path / "bg_dir"
+        dir_path.mkdir()
+        req_logger = RequestLogger(dir_path, background=True)
+        try:
+            with caplog.at_level(logging.WARNING, logger="acpbox.request_logger"):
+                req_logger.write_event("custom", {"ok": False}, request_id="r-bg-err")
+                req_logger.flush()
+        finally:
+            req_logger.close()
+        assert any("Failed to write request log event" in rec.message for rec in caplog.records)

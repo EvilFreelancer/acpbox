@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from acp.schema import TextContentBlock
 from starlette.testclient import TestClient
 
 from acpbox.acp_stdio import AcpRunner
@@ -171,6 +172,12 @@ def test_chat_completion_non_stream_logs_http_and_acp_traffic(
     assert "session/new" in sent_methods
     assert "session/set_mode" in sent_methods
     assert "session/prompt" in sent_methods
+    prompt_send = next(
+        r["message"] for r in req_events if r["event"] == "acp_send" and r["message"].get("method") == "session/prompt"
+    )
+    validated_blocks = [TextContentBlock.model_validate(b) for b in prompt_send["params"]["prompt"]]
+    assert len(validated_blocks) == 1
+    assert "List workspace files" in validated_blocks[0].text
     assert any(
         r["event"] == "acp_send"
         and r["message"].get("id") == 99
@@ -229,6 +236,16 @@ def test_chat_completion_stream_logs_sse_and_acp_traffic(
         if r["request_id"] == request_id and r["event"] == "acp_recv" and r.get("tool_event")
     ]
     assert tool_kinds == ["tool_call", "permission_request", "tool_call_update"]
+    prompt_send = next(
+        r["message"]
+        for r in records
+        if r["request_id"] == request_id
+        and r["event"] == "acp_send"
+        and r["message"].get("method") == "session/prompt"
+    )
+    validated_blocks = [TextContentBlock.model_validate(b) for b in prompt_send["params"]["prompt"]]
+    assert len(validated_blocks) == 1
+    assert "Run ls" in validated_blocks[0].text
 
 
 def test_get_models_logs_http_request_before_acp_traffic(
@@ -308,6 +325,11 @@ async def test_acp_runner_message_hook_captures_all_messages(tmp_path: Path) -> 
     assert "session/new" in sent_methods
     assert "session/set_mode" in sent_methods
     assert "session/prompt" in sent_methods
+    prompt_send = next(
+        r["message"] for r in records if r["event"] == "acp_send" and r["message"].get("method") == "session/prompt"
+    )
+    validated_blocks = [TextContentBlock.model_validate(b) for b in prompt_send["params"]["prompt"]]
+    assert validated_blocks == [TextContentBlock(type="text", text="hello")]
     tool_kinds = [r.get("kind") for r in records if r["event"] == "acp_recv" and r.get("tool_event")]
     assert tool_kinds == ["tool_call", "permission_request", "tool_call_update"]
 

@@ -153,11 +153,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await runner.start()
     except AcpStdioError as e:
         logger.error("ACP agent failed to start: %s", e)
+        if request_logger is not None:
+            request_logger.close()
         raise
     app.state.runner = runner
-    yield
-    await runner.stop()
-    app.state.runner = None
+    try:
+        yield
+    finally:
+        await runner.stop()
+        app.state.runner = None
+        if request_logger is not None:
+            request_logger.close()
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
@@ -173,7 +179,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
     request_logger: RequestLogger | None = None
     if config.gateway.request_log_file:
-        request_logger = RequestLogger(config.gateway.request_log_file)
+        request_logger = RequestLogger(config.gateway.request_log_file, background=True)
         app.add_middleware(RequestLoggingMiddleware, request_logger=request_logger)
     app.state.request_logger = request_logger
 
