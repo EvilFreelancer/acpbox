@@ -131,3 +131,4 @@ Antigravity CLI authenticates with Google OAuth rather than a static API key:
 - **CURSOR_API_KEY** – Optional. Cursor Agent API key for headless use inside the container.
 - **GATEWAY_HOST**, **GATEWAY_PORT** – Gateway bind address and port.
 - **ACPBOX_GATEWAY_WORKERS**, **ACPBOX_GATEWAY_THREADS** – Uvicorn worker processes and optional **`threads=`** when supported (see [config.md](config.md)).
+- **ACPBOX_GATEWAY_REQUEST_LOG_FILE** – Optional. Path to a JSONL file recording correlated raw HTTP requests/responses and ACP JSON-RPC traffic (see [config.md](config.md)).

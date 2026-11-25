@@ -19,14 +19,14 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 **Request mapping (messages -> ACP prompt):**
 
-- Messages are converted to one or more ACP `ContentBlock` values from the python SDK. The gateway uses helpers from `agent-client-protocol` (for example `acp.text_block`) so the resulting JSON matches the official ACP schema.
+- Messages are converted to one or more ACP `ContentBlock` values from the Python SDK. The gateway constructs `acp.schema.TextContentBlock` (compatible with `agent-client-protocol>=1.0.0`) so the resulting JSON matches the official ACP schema.
 - System/user/assistant/developer messages are concatenated into a single text block of the form `"role: content"` separated by blank lines.
 - Multi-turn tool history is preserved in the prompt: `assistant` messages with `tool_calls` (even when `content` is `null`) are serialized as `assistant (tool_call id=<id>): <name>(<arguments>)`, and `role: "tool"` messages are serialized as `tool (tool_call_id=<id>[, name=<name>]): <content>`.
 
 **Client-side tool calling (`tools` / `tool_choice`):**
 
 - When `tools` is non-empty and `tool_choice` is not `"none"`, the gateway prepends an OpenAI tool-bridge instruction block containing the declared tool schemas inside `<available_tools>...</available_tools>` and the active `tool_choice` policy (`"auto"`, `"required"`, or a forced `{"type": "function", "function": {"name": "..."}}`). If `metadata.model` is set, the `model: <value>` line stays first.
-- The ACP agent emits external tool calls as `<acpbox_tool_call>{"name": "<tool_name>", "arguments": {...}}</acpbox_tool_call>` blocks. Only allowed tool names are accepted (all declared `tools`, narrowed to the forced function when `tool_choice` specifies one).
+- The ACP agent emits external tool calls as `<acpbox_tool_call>{"name": "<tool_name>", "arguments": {...}}</acpbox_tool_call>` blocks. Only allowed tool names are accepted (all declared `tools`, narrowed to the forced function when `tool_choice` specifies one); valid tagged blocks for disallowed tools are stripped from assistant content in both streaming and non-streaming modes. If `tool_choice` forces a function name not declared in `tools`, the gateway returns **400** (`invalid_input`).
 - **Non-stream (`stream: false`):** Matched tool-call blocks are parsed into `choices[0].message.tool_calls` (`id`, `type: "function"`, `function: { name, arguments }`), stripped from `choices[0].message.content` (becoming `null` if no prose remains), and `choices[0].finish_reason` is set to `"tool_calls"`. When no tool calls are emitted, `tool_calls` is omitted from `choices[0].message`.
 - **Streaming (`stream: true`):** An incremental parser streams plain text immediately while buffering only potential `<acpbox_tool_call>` prefixes/blocks so raw tags never leak into `delta.content`. Each parsed call is emitted as a chunk with `choices[0].delta.tool_calls: [{"index": N, "id", "type": "function", "function": {"name", "arguments"}}]` and the terminal chunk sets `finish_reason: "tool_calls"`.
 - When `tools` is omitted/empty or `tool_choice` is `"none"`, no bridge instructions are added, `<acpbox_tool_call>` tags are not parsed, and streaming uses zero buffering.

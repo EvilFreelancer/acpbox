@@ -32,7 +32,7 @@ Covers the ACP transport, OpenAI <-> ACP translation, agent config adapters, con
 ## `mapping.py` - OpenAI <-> ACP translation
 
 - Pure functions only: no I/O, no runner, no FastAPI.
-- Prompt building flattens all messages (chat) or input items (responses) into **one** ACP text block of `"role: content"` parts joined by blank lines, built with `acp.text_block`. Only text parts are used (`text` for chat, `input_text` for responses).
+- Prompt building flattens all messages (chat) or input items (responses) into **one** ACP text block of `"role: content"` parts joined by blank lines, built with `acp.schema.TextContentBlock` (compatible with `agent-client-protocol>=1.0.0`). Only text parts are used (`text` for chat, `input_text` for responses).
 - A `metadata.model` value is prepended as a `model: <value>` line so OpenCode can pick the underlying LLM.
 - `summarize_acp_session_for_non_stream` merges consecutive `agent_thought_chunk` text into `reasoning` steps, folds `tool_call` / `tool_call_update` into one `command` step per `toolCallId`, ignores noise kinds (`usage_update`, `plan`, mode and command updates), and returns `None` when no steps remain.
 - Tool titles go through `sanitize_acp_tool_title`, which strips gpt-oss Harmony `<|channel|>...` suffixes.

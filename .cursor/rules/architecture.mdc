@@ -31,7 +31,7 @@ Build bottom-up. A module may import only from lower layers (and, inside `acpbox
 
 What each layer may know about the outside world:
 - `acp_stdio.py` - stdlib asyncio subprocess streams plus `acp.schema` models. No OpenAI shapes, no FastAPI, no HTTP.
-- `mapping.py` - pure OpenAI <-> ACP conversion using `acp` SDK helpers (`acp.text_block`) and `schemas.py`. No I/O, no runner calls.
+- `mapping.py` - pure OpenAI <-> ACP conversion using `acp.schema.TextContentBlock` (compatible with `agent-client-protocol>=1.0.0`) and `schemas.py`. No I/O, no runner calls.
 - `agents/*` - JSON file I/O inside the workspace only. No FastAPI.
 - `config.py` - YAML file plus environment. No other project module.
 - FastAPI request/response machinery appears only in `routes/` and `main.py`; `errors.py` uses nothing but `fastapi.status` constants.

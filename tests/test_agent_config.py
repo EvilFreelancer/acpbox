@@ -72,9 +72,11 @@ class TestDetectAgentType:
         assert detect_agent_type(["agent", "acp"]) == "cursor"
 
     def test_agy(self):
+        """Detect Antigravity CLI from the bare 'agy' command name."""
         assert detect_agent_type(["agy", "acp"]) == "agy"
 
     def test_agy_full_path(self):
+        """Detect Antigravity CLI when 'agy' is invoked via an absolute path."""
         assert detect_agent_type(["/usr/local/bin/agy", "acp"]) == "agy"
 
     def test_full_path(self):
@@ -106,11 +108,13 @@ class TestCreateAdapter:
         assert isinstance(a, CursorAdapter)
 
     def test_agy(self):
+        """Create AgyAdapter for the 'agy acp' command."""
         a = create_adapter(["agy", "acp"], "/tmp/ws")
         assert isinstance(a, AgyAdapter)
         assert a.agent_type == "agy"
 
     def test_agy_full_path(self):
+        """Create AgyAdapter when 'agy' is specified with a full binary path."""
         a = create_adapter(["/usr/local/bin/agy", "acp"], "/tmp/ws")
         assert isinstance(a, AgyAdapter)
         assert a.agent_type == "agy"
@@ -336,15 +340,18 @@ class TestCursorAdapterUnit:
 
 class TestAgyAdapterUnit:
     def test_config_path(self, tmp_path: Path):
+        """Resolve config_path to .gemini/antigravity-cli/settings.json under workspace."""
         a = AgyAdapter(str(tmp_path))
         assert a.config_path == tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
 
     def test_read_missing_config(self, tmp_path: Path):
+        """Return empty config and permissions dicts when settings.json does not exist."""
         a = AgyAdapter(str(tmp_path))
         assert a.read_config() == {}
         assert a.get_permissions() == {}
 
     def test_set_creates_sorted_allow_ask_deny_lists(self, tmp_path: Path):
+        """Write permissions into sorted native allow, ask, and deny lists."""
         a = AgyAdapter(str(tmp_path))
         a.set_permissions({
             "read_file(*)": "allow",
@@ -362,6 +369,7 @@ class TestAgyAdapterUnit:
         }
 
     def test_roundtrip(self, tmp_path: Path):
+        """Round-trip flat allow/ask/deny permissions cleanly through disk."""
         a = AgyAdapter(str(tmp_path))
         original = {
             "read_file(*)": "allow",
@@ -372,6 +380,7 @@ class TestAgyAdapterUnit:
         assert a.get_permissions() == original
 
     def test_precedence_deny_over_ask_over_allow(self, tmp_path: Path):
+        """Apply native deny > ask > allow precedence when a rule appears in multiple lists."""
         a = AgyAdapter(str(tmp_path))
         a.write_config({
             "permissions": {
@@ -387,6 +396,7 @@ class TestAgyAdapterUnit:
         }
 
     def test_pattern_keys_preserved(self, tmp_path: Path):
+        """Preserve scoped action(target) permission patterns verbatim."""
         a = AgyAdapter(str(tmp_path))
         patterns = {
             "command(git *)": "allow",
@@ -404,6 +414,7 @@ class TestAgyAdapterUnit:
         }
 
     def test_update_merges_and_moves_between_lists(self, tmp_path: Path):
+        """Merge partial permission updates and move updated rules between native lists."""
         a = AgyAdapter(str(tmp_path))
         a.set_permissions({"read_file(*)": "allow", "command(*)": "allow"})
         result = a.update_permissions({"command(*)": "ask", "write_file(*)": "deny"})
@@ -425,6 +436,7 @@ class TestAgyAdapterUnit:
         assert "read_file(*)" in cfg2["permissions"]["deny"]
 
     def test_preserves_non_permission_keys(self, tmp_path: Path):
+        """Preserve unrelated keys in settings.json when writing permissions."""
         cfg_dir = tmp_path / ".gemini" / "antigravity-cli"
         cfg_dir.mkdir(parents=True)
         (cfg_dir / "settings.json").write_text(json.dumps({
@@ -439,6 +451,7 @@ class TestAgyAdapterUnit:
         assert cfg["permissions"]["allow"] == ["read_file(*)"]
 
     def test_known_permissions(self, tmp_path: Path):
+        """Return the documented list of known Antigravity CLI wildcard permissions."""
         a = AgyAdapter(str(tmp_path))
         assert a.known_permissions() == [
             "read_file(*)",
@@ -450,33 +463,39 @@ class TestAgyAdapterUnit:
         ]
 
     def test_allowed_values(self, tmp_path: Path):
+        """Allow allow, deny, and ask permission values for Antigravity CLI."""
         a = AgyAdapter(str(tmp_path))
         assert a.allowed_values() == ["allow", "deny", "ask"]
 
     def test_apply_preset_allow_all(self, tmp_path: Path):
+        """Apply allow_all preset by setting all known permissions to allow."""
         a = AgyAdapter(str(tmp_path))
         result = a.apply_preset("allow_all")
         assert all(v == "allow" for v in result.values())
         assert set(result.keys()) == set(a.known_permissions())
 
     def test_apply_preset_deny_all(self, tmp_path: Path):
+        """Apply deny_all preset by setting all known permissions to deny."""
         a = AgyAdapter(str(tmp_path))
         result = a.apply_preset("deny_all")
         assert all(v == "deny" for v in result.values())
         assert set(result.keys()) == set(a.known_permissions())
 
     def test_apply_preset_ask_all(self, tmp_path: Path):
+        """Apply ask_all preset by setting all known permissions to ask."""
         a = AgyAdapter(str(tmp_path))
         result = a.apply_preset("ask_all")
         assert all(v == "ask" for v in result.values())
         assert set(result.keys()) == set(a.known_permissions())
 
     def test_apply_preset_unknown_raises(self, tmp_path: Path):
+        """Raise ValueError when an unknown preset name is requested."""
         a = AgyAdapter(str(tmp_path))
         with pytest.raises(ValueError, match="Unknown preset"):
             a.apply_preset("nope")
 
     def test_set_replaces_previous_permissions(self, tmp_path: Path):
+        """Replace all existing permissions when set_permissions is called."""
         a = AgyAdapter(str(tmp_path))
         a.set_permissions({"read_file(*)": "allow", "command(*)": "ask"})
         result = a.set_permissions({"command(rm -rf)": "deny"})
@@ -484,6 +503,7 @@ class TestAgyAdapterUnit:
         assert a.get_permissions() == {"command(rm -rf)": "deny"}
 
     def test_update_preserves_non_permission_keys(self, tmp_path: Path):
+        """Preserve unrelated keys in settings.json during update_permissions."""
         a = AgyAdapter(str(tmp_path))
         a.write_config({"model": "gemini-2.5-pro", "permissions": {"allow": ["read_file(*)"]}})
         a.update_permissions({"command(*)": "ask"})
@@ -492,6 +512,7 @@ class TestAgyAdapterUnit:
         assert cfg["permissions"] == {"allow": ["read_file(*)"], "ask": ["command(*)"], "deny": []}
 
     def test_null_permissions_and_lists_handled_safely(self, tmp_path: Path):
+        """Handle null permissions object or null rule lists without raising."""
         a = AgyAdapter(str(tmp_path))
         a.write_config({"permissions": None})
         assert a.get_permissions() == {}
@@ -499,6 +520,7 @@ class TestAgyAdapterUnit:
         assert a.get_permissions() == {"command(*)": "ask"}
 
     def test_invalid_value_raises_value_error(self, tmp_path: Path):
+        """Reject unsupported permission values with ValueError."""
         a = AgyAdapter(str(tmp_path))
         with pytest.raises(ValueError, match="Invalid permission value"):
             a.set_permissions({"command(*)": "yolo"})
@@ -544,6 +566,7 @@ class TestWritability:
         assert a.is_writable is True
 
     def test_writable_two_level_nonexistent_parent_agy(self, tmp_path: Path):
+        """Report writable=True when nested .gemini/antigravity-cli dirs do not yet exist in a writable workspace."""
         a = AgyAdapter(str(tmp_path))
         # .gemini/antigravity-cli/ dirs do not exist yet but tmp_path is writable
         assert a.is_writable is True
@@ -838,6 +861,7 @@ def agy_client(agy_workspace: Path) -> TestClient:
 
 class TestAgyAPI:
     def test_get_info(self, agy_client: TestClient):
+        """GET /v1/agent returns agy metadata, config path, and supported permissions."""
         r = agy_client.get("/v1/agent")
         assert r.status_code == 200
         d = r.json()
@@ -855,6 +879,7 @@ class TestAgyAPI:
         assert d["config_path"].endswith(".gemini/antigravity-cli/settings.json")
 
     def test_put_explicit_and_native_format(self, agy_workspace: Path, agy_client: TestClient):
+        """PUT /v1/agent/permissions persists allow, ask, and deny lists to settings.json."""
         r = agy_client.put("/v1/agent/permissions", json={
             "permissions": {
                 "read_file(*)": "allow",
@@ -876,6 +901,7 @@ class TestAgyAPI:
         }
 
     def test_put_preset_ask_all(self, agy_client: TestClient):
+        """PUT /v1/agent/permissions with ask_all sets all known permissions to ask."""
         r = agy_client.put("/v1/agent/permissions", json={"preset": "ask_all"})
         assert r.status_code == 200
         p = r.json()["permissions"]
@@ -883,6 +909,7 @@ class TestAgyAPI:
         assert "read_file(*)" in p
 
     def test_put_preset_allow_all(self, agy_client: TestClient):
+        """PUT /v1/agent/permissions with allow_all sets all known permissions to allow."""
         r = agy_client.put("/v1/agent/permissions", json={"preset": "allow_all"})
         assert r.status_code == 200
         p = r.json()["permissions"]
@@ -890,6 +917,7 @@ class TestAgyAPI:
         assert "command(*)" in p
 
     def test_patch_merges(self, agy_client: TestClient):
+        """PATCH /v1/agent/permissions merges updates into existing agy permissions."""
         agy_client.put("/v1/agent/permissions", json={"preset": "deny_all"})
         r = agy_client.patch("/v1/agent/permissions", json={
             "permissions": {"read_file(*)": "allow", "command(*)": "ask"},
@@ -901,6 +929,7 @@ class TestAgyAPI:
         assert p["write_file(*)"] == "deny"
 
     def test_invalid_value_rejected(self, agy_client: TestClient):
+        """PUT /v1/agent/permissions rejects unsupported permission values with 422."""
         r = agy_client.put("/v1/agent/permissions", json={
             "permissions": {"command(*)": "yolo"},
         })

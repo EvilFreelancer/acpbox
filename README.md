@@ -97,7 +97,7 @@ python -m acpbox.main --config ./config.yaml
 
    Use an absolute path if the binary is not on `PATH` (e.g. `["/home/you/.local/bin/agent","acp"]`). Cursor Agent must be installed and logged in (`agent login`) so the subprocess can reach your account.
 
-3. **Run** – Start **`acpbox`** with **`ACPBOX_CONFIG_PATH`** (and other env vars) as needed. Use **`gateway.workers`** in YAML or **`ACPBOX_GATEWAY_WORKERS`** for worker count (one ACP subprocess per worker). **`ACPBOX_GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your uvicorn supports a `threads=` argument (many builds do not; ASGI uses **asyncio** per process).
+3. **Run** – Start **`acpbox`** with **`ACPBOX_CONFIG_PATH`** (and other env vars) as needed. Use **`gateway.workers`** in YAML or **`ACPBOX_GATEWAY_WORKERS`** for worker count (one ACP subprocess per worker). **`ACPBOX_GATEWAY_THREADS`** is forwarded into **`uvicorn.run`** only if your uvicorn supports a `threads=` argument (many builds do not; ASGI uses **asyncio** per process). Set optional **`gateway.request_log_file`** / **`ACPBOX_GATEWAY_REQUEST_LOG_FILE`** to append correlated raw HTTP and ACP JSON-RPC traffic to a JSONL file (see [docs/config.md](docs/config.md)).
 
 Or with Docker Compose (reads `.env` and runs the **`acpbox`** service). Set **`AGENTS`** in `.env` to install missing agent binaries at container startup (comma-separated `opencode`, `cursor`, `claude`, `codex`, `agy`). Runtime **`ACPBOX_ACP_COMMAND`** must match the installed binary (see Agent command table above). The image **CMD** is **`acpbox`** (uvicorn inside **`acpbox.main.run`**), with **`ACPBOX_GATEWAY_WORKERS`** and **`ACPBOX_GATEWAY_THREADS`** passed through the environment.
 
