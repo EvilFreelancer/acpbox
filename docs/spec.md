@@ -4,7 +4,7 @@
 
 This project is an **ACP (Agent Client Protocol) Gateway**: it exposes an OpenAI-compatible HTTP API and translates requests to the [Agent Client Protocol](https://agentclientprotocol.com) over **stdio**. Clients (IDEs, scripts, OpenAI SDKs) call the gateway as if it were an OpenAI API; the gateway runs ACP-compatible agents as subprocesses and speaks JSON-RPC with them over stdin/stdout.
 
-The gateway now uses the official Python SDK `agent-client-protocol` for ACP schema models and helpers. Content blocks for `session/prompt` are built via SDK helpers (for example `acp.text_block`) and validated against `acp.schema` so payloads stay in sync with upstream ACP releases.
+The gateway now uses the official Python SDK `agent-client-protocol` (`>=1.0.0`) for ACP schema models. Content blocks for `session/prompt` are built with `acp.schema.TextContentBlock` and validated against `acp.schema` so payloads stay in sync with upstream ACP releases.
 
 ## Agent Client Protocol (ACP)
 
@@ -27,7 +27,7 @@ ACP is a standard for communication between AI agents and clients. Key facts:
 |-----------------|------------------|
 | `GET /v1/models` | Use worker's ACP process: initialize (if needed), session/new -> `modes.availableModes`; return those ids as models. 503 if agent fails. |
 | `GET /v1/models/{id}` | Same; return one model if id is in the agent's mode list; else 404. |
-| `POST /v1/chat/completions` | Use worker's ACP process: session/new -> optional session/set_mode -> session/prompt -> aggregate agent text from session/update -> return OpenAI chat completion with optional JSON **`acp.steps`** (summarized reasoning + commands when `stream: false`), or **SSE** when `stream: true` (raw **`acp`** per chunk; terminal `data: [DONE]`). |
+| `POST /v1/chat/completions` | Use worker's ACP process: session/new -> optional session/set_mode -> session/prompt -> aggregate agent text from session/update -> return OpenAI chat completion with optional JSON **`acp.steps`** (summarized reasoning + commands when `stream: false`), or **SSE** when `stream: true` (raw **`acp`** per chunk; terminal `data: [DONE]`). Supports client-side OpenAI `tools` / `tool_choice` / `tool_calls` / `role: "tool"` bridging in both non-streaming and SSE modes. |
 | `POST /v1/responses` | Same as above; optional `chat_id` for client continuity; optional **`acp.steps`** like chat non-stream. |
 | `DELETE /v1/responses/{id}`, `DELETE /v1/sessions/{id}` | Gateway-only session store; no ACP call. |
 | `GET /v1/agent` | Agent info: type, config path, writable status, known permissions, allowed values. 501 if unknown agent. |

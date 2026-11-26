@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -11,10 +12,12 @@ from fastapi.responses import StreamingResponse
 from acpbox.acp_stdio import AcpStdioError
 from acpbox.errors import openai_error_body
 from acpbox.mapping import (
+    StreamingToolCallParser,
     acp_aggregated_text_to_chat_completion,
     acp_stop_reason_to_openai_finish,
     chat_completion_chunk_sse_dict,
     openai_messages_to_acp_prompt_blocks,
+    resolve_allowed_tool_names,
 )
 from acpbox.schemas import CreateChatCompletionRequest, CreateChatCompletionResponse
 
@@ -31,9 +34,24 @@ async def create_chat_completion(
     request: Request,
 ):
     """POST /v1/chat/completions: use per-worker ACP runner, session/prompt, return chat completion or SSE stream."""
+    tools_dump = [t.model_dump() for t in body.tools] if body.tools else None
+    allowed_tool_names = resolve_allowed_tool_names(tools_dump, body.tool_choice)
+    if allowed_tool_names is not None and not allowed_tool_names:
+        forced_fn = body.tool_choice.get("function") if isinstance(body.tool_choice, dict) else None
+        forced_name = forced_fn.get("name") if isinstance(forced_fn, dict) else ""
+        raise HTTPException(
+            status_code=400,
+            detail=openai_error_body(
+                f"tool_choice references unknown tool: {forced_name}",
+                "invalid_input",
+            ),
+        )
+
     prompt_blocks = openai_messages_to_acp_prompt_blocks(
         [m.model_dump() for m in body.messages],
         metadata=body.metadata,
+        tools=tools_dump,
+        tool_choice=body.tool_choice,
     )
     if not prompt_blocks:
         raise HTTPException(
@@ -47,6 +65,7 @@ async def create_chat_completion(
             runner=runner,
             body=body,
             prompt_blocks=prompt_blocks,
+            allowed_tool_names=allowed_tool_names,
         )
 
     try:
@@ -64,6 +83,7 @@ async def create_chat_completion(
         body.model,
         finish_reason=stop_reason,
         acp_raw=acp_updates,
+        allowed_tool_names=allowed_tool_names,
     )
 
 
@@ -72,6 +92,7 @@ async def _chat_completion_stream(
     runner: Any,
     body: CreateChatCompletionRequest,
     prompt_blocks: list[Any],
+    allowed_tool_names: set[str] | None = None,
 ) -> StreamingResponse:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -94,6 +115,9 @@ async def _chat_completion_stream(
 
     async def sse_body():
         role_sent = False
+        parser = StreamingToolCallParser(allowed_tool_names) if allowed_tool_names is not None else None
+        tool_call_index = 0
+
         if first_evt is None:
             yield _sse_data(
                 chat_completion_chunk_sse_dict(
@@ -125,6 +149,70 @@ async def _chat_completion_stream(
                 ),
             )
 
+        def render_parsed_events(events: Sequence[tuple[str, Any]]) -> list[str]:
+            nonlocal role_sent, tool_call_index
+            rendered: list[str] = []
+            for ev_kind, ev_val in events:
+                if ev_kind == "text":
+                    if not ev_val:
+                        continue
+                    if not role_sent:
+                        rendered.append(role_chunk())
+                        role_sent = True
+                    rendered.append(
+                        _sse_data(
+                            chat_completion_chunk_sse_dict(
+                                completion_id=completion_id,
+                                created=created,
+                                model=model,
+                                delta={"content": ev_val},
+                            ),
+                        ),
+                    )
+                elif ev_kind == "tool_call":
+                    if not role_sent:
+                        rendered.append(role_chunk())
+                        role_sent = True
+                    rendered.append(
+                        _sse_data(
+                            chat_completion_chunk_sse_dict(
+                                completion_id=completion_id,
+                                created=created,
+                                model=model,
+                                delta={"tool_calls": [{"index": tool_call_index, **ev_val}]},
+                            ),
+                        ),
+                    )
+                    tool_call_index += 1
+            return rendered
+
+        def finish_stream(stop_reason: str) -> list[str]:
+            nonlocal role_sent
+            rendered: list[str] = []
+            if parser is not None:
+                rendered.extend(render_parsed_events(parser.finish()))
+            if not role_sent:
+                rendered.append(role_chunk())
+                role_sent = True
+            finish = (
+                "tool_calls"
+                if tool_call_index > 0
+                else acp_stop_reason_to_openai_finish(stop_reason)
+            )
+            rendered.append(
+                _sse_data(
+                    chat_completion_chunk_sse_dict(
+                        completion_id=completion_id,
+                        created=created,
+                        model=model,
+                        delta={},
+                        finish_reason=finish,
+                    ),
+                ),
+            )
+            rendered.append("data: [DONE]\n\n")
+            return rendered
+
         pending = first_evt
         while pending is not None:
             kind, payload = pending
@@ -139,50 +227,31 @@ async def _chat_completion_stream(
                     ),
                 )
             elif kind == "text":
-                if not role_sent:
-                    yield role_chunk()
-                    role_sent = True
-                if payload:
-                    yield _sse_data(
-                        chat_completion_chunk_sse_dict(
-                            completion_id=completion_id,
-                            created=created,
-                            model=model,
-                            delta={"content": payload},
-                        ),
-                    )
+                if parser is None:
+                    if not role_sent:
+                        yield role_chunk()
+                        role_sent = True
+                    if payload:
+                        yield _sse_data(
+                            chat_completion_chunk_sse_dict(
+                                completion_id=completion_id,
+                                created=created,
+                                model=model,
+                                delta={"content": payload},
+                            ),
+                        )
+                elif payload:
+                    for chunk_str in render_parsed_events(parser.feed(payload)):
+                        yield chunk_str
             elif kind == "done":
-                if not role_sent:
-                    yield role_chunk()
-                    role_sent = True
-                finish = acp_stop_reason_to_openai_finish(payload)
-                yield _sse_data(
-                    chat_completion_chunk_sse_dict(
-                        completion_id=completion_id,
-                        created=created,
-                        model=model,
-                        delta={},
-                        finish_reason=finish,
-                    ),
-                )
-                yield "data: [DONE]\n\n"
+                for chunk_str in finish_stream(payload):
+                    yield chunk_str
                 return
             try:
                 pending = await aiter.__anext__()
             except StopAsyncIteration:
-                if not role_sent:
-                    yield role_chunk()
-                    role_sent = True
-                yield _sse_data(
-                    chat_completion_chunk_sse_dict(
-                        completion_id=completion_id,
-                        created=created,
-                        model=model,
-                        delta={},
-                        finish_reason="stop",
-                    ),
-                )
-                yield "data: [DONE]\n\n"
+                for chunk_str in finish_stream("end_turn"):
+                    yield chunk_str
                 return
 
     return StreamingResponse(

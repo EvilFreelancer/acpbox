@@ -1,5 +1,6 @@
 """Agent config adapters - detect agent type from ACP command and manage its config."""
 
+from .agy import AgyAdapter
 from .base import AgentConfigAdapter
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
@@ -11,6 +12,7 @@ AGENT_COMMAND_MAP: dict[str, type[AgentConfigAdapter]] = {
     "claude-agent-acp": ClaudeAdapter,
     "codex-acp": CodexAdapter,
     "agent": CursorAdapter,
+    "agy": AgyAdapter,
 }
 
 
@@ -38,6 +40,7 @@ def create_adapter(command: list[str], workspace: str) -> AgentConfigAdapter | N
 
 __all__ = [
     "AgentConfigAdapter",
+    "AgyAdapter",
     "ClaudeAdapter",
     "CodexAdapter",
     "CursorAdapter",

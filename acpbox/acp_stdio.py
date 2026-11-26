@@ -12,17 +12,19 @@ import logging
 import os
 import re
 import sys
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
-from collections.abc import AsyncGenerator
 from typing import Any, Literal, Sequence
+
+from acp.schema import TextContentBlock
+
+AcpMessageHook = Callable[[Literal["send", "recv"], dict[str, Any]], None]
 
 TurnStreamEvent = (
     tuple[Literal["text"], str]
     | tuple[Literal["done"], str]
     | tuple[Literal["session"], dict[str, Any]]
 )
-
-from acp.schema import TextContentBlock
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +38,38 @@ class AcpStdioError(Exception):
     """Raised when ACP stdio handshake or call fails."""
 
 
-async def _write_message(stream: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
+def _invoke_message_hook(
+    on_message: AcpMessageHook | None,
+    direction: Literal["send", "recv"],
+    msg: dict[str, Any],
+) -> None:
+    """Invoke observational ACP message hook safely without breaking stdio framing."""
+    if on_message is None:
+        return
+    try:
+        on_message(direction, msg)
+    except Exception as e:
+        logger.warning("ACP message hook (%s) raised: %s", direction, e)
+
+
+async def _write_message(
+    stream: asyncio.StreamWriter,
+    obj: dict[str, Any],
+    *,
+    on_message: AcpMessageHook | None = None,
+) -> None:
     """Send one JSON-RPC message (newline-delimited, no embedded newlines)."""
+    _invoke_message_hook(on_message, "send", obj)
     line = json.dumps(obj, ensure_ascii=False) + "\n"
     stream.write(line.encode("utf-8"))
     await stream.drain()
 
 
-async def _read_message(stream: asyncio.StreamReader) -> dict[str, Any] | None:
+async def _read_message(
+    stream: asyncio.StreamReader,
+    *,
+    on_message: AcpMessageHook | None = None,
+) -> dict[str, Any] | None:
     """Read one newline-delimited JSON-RPC message. Returns None on EOF."""
     try:
         line = await stream.readuntil(b"\n")
@@ -57,7 +83,9 @@ async def _read_message(stream: asyncio.StreamReader) -> dict[str, Any] | None:
         ) from e
     if not line.strip():
         return None
-    return json.loads(line.decode("utf-8").strip())
+    msg: dict[str, Any] = json.loads(line.decode("utf-8").strip())
+    _invoke_message_hook(on_message, "recv", msg)
+    return msg
 
 
 # Heuristic for stderr_pipe_split: route these to process stderr, rest to stdout.
@@ -136,17 +164,22 @@ async def _request(
     method: str,
     params: dict[str, Any] | None,
     timeout: float = 120.0,
+    *,
+    on_message: AcpMessageHook | None = None,
 ) -> dict[str, Any]:
     """Send JSON-RPC request and wait for response with same id. Raises on error or timeout."""
     req = {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}}
-    await _write_message(writer, req)
+    await _write_message(writer, req, on_message=on_message)
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise AcpStdioError(f"Timeout waiting for response to {method}")
         try:
-            msg = await asyncio.wait_for(_read_message(reader), timeout=min(remaining, 60.0))
+            msg = await asyncio.wait_for(
+                _read_message(reader, on_message=on_message),
+                timeout=min(remaining, 60.0),
+            )
         except asyncio.TimeoutError:
             continue
         if msg is None:
@@ -177,12 +210,14 @@ class AcpRunner:
         *,
         stderr_mode: Literal["inherit", "pipe", "devnull"] = "inherit",
         stderr_pipe_split: bool = False,
+        message_hook: AcpMessageHook | None = None,
     ) -> None:
         self._command = command
         self._env = dict(os.environ) | env
         self._workspace_dir = _resolved_workspace_dir(workspace)
         self._stderr_mode = stderr_mode
         self._stderr_pipe_split = stderr_pipe_split
+        self._message_hook = message_hook
         self._proc: asyncio.subprocess.Process | None = None
         self._stdin_writer: asyncio.StreamWriter | None = None
         self._stdout_reader: asyncio.StreamReader | None = None
@@ -234,6 +269,7 @@ class AcpRunner:
                 "clientInfo": {"name": "acpbox", "version": "0.1.0"},
             },
             timeout=30.0,
+            on_message=self._message_hook,
         )
         self._next_id += 1
         self._initialized = True
@@ -255,6 +291,7 @@ class AcpRunner:
             "session/new",
             {"cwd": self._workspace_dir, "mcpServers": []},
             timeout=30.0,
+            on_message=self._message_hook,
         )
         self._next_id += 1
         agent_name: str | None = None
@@ -297,6 +334,7 @@ class AcpRunner:
             "session/new",
             {"cwd": self._workspace_dir, "mcpServers": []},
             timeout=request_timeout,
+            on_message=self._message_hook,
         )
         self._next_id += 1
         session_id = new_result.get("sessionId")
@@ -310,6 +348,7 @@ class AcpRunner:
                 "session/set_mode",
                 {"sessionId": session_id, "modeId": mode_id},
                 timeout=request_timeout,
+                on_message=self._message_hook,
             )
             self._next_id += 1
         prompt_id = self._next_id
@@ -319,12 +358,15 @@ class AcpRunner:
             "method": "session/prompt",
             "params": {"sessionId": session_id, "prompt": prompt_payload},
         }
-        await _write_message(self._stdin_writer, req)
+        await _write_message(self._stdin_writer, req, on_message=self._message_hook)
         collected_text: list[str] = []
         session_updates: list[dict[str, Any]] = []
         stop_reason = "end_turn"
         while True:
-            msg = await asyncio.wait_for(_read_message(self._stdout_reader), timeout=request_timeout)
+            msg = await asyncio.wait_for(
+                _read_message(self._stdout_reader, on_message=self._message_hook),
+                timeout=request_timeout,
+            )
             if msg is None:
                 raise AcpStdioError("EOF before session/prompt response")
             if "id" in msg and msg["id"] == prompt_id:
@@ -359,7 +401,7 @@ class AcpRunner:
                 perm_id = msg.get("id")
                 if perm_id is not None:
                     reply = {"jsonrpc": "2.0", "id": perm_id, "result": {"outcome": "allow_once"}}
-                    await _write_message(self._stdin_writer, reply)
+                    await _write_message(self._stdin_writer, reply, on_message=self._message_hook)
                 continue
             logger.debug("ACP message: %s", msg.get("method") or msg)
         self._next_id += 1
@@ -398,6 +440,7 @@ class AcpRunner:
             "session/new",
             {"cwd": self._workspace_dir, "mcpServers": []},
             timeout=request_timeout,
+            on_message=self._message_hook,
         )
         self._next_id += 1
         session_id = new_result.get("sessionId")
@@ -411,6 +454,7 @@ class AcpRunner:
                 "session/set_mode",
                 {"sessionId": session_id, "modeId": mode_id},
                 timeout=request_timeout,
+                on_message=self._message_hook,
             )
             self._next_id += 1
         prompt_id = self._next_id
@@ -420,10 +464,13 @@ class AcpRunner:
             "method": "session/prompt",
             "params": {"sessionId": session_id, "prompt": prompt_payload},
         }
-        await _write_message(self._stdin_writer, req)
+        await _write_message(self._stdin_writer, req, on_message=self._message_hook)
         stop_reason = "end_turn"
         while True:
-            msg = await asyncio.wait_for(_read_message(self._stdout_reader), timeout=request_timeout)
+            msg = await asyncio.wait_for(
+                _read_message(self._stdout_reader, on_message=self._message_hook),
+                timeout=request_timeout,
+            )
             if msg is None:
                 raise AcpStdioError("EOF before session/prompt response")
             if "id" in msg and msg["id"] == prompt_id:
@@ -460,7 +507,7 @@ class AcpRunner:
                 perm_id = msg.get("id")
                 if perm_id is not None:
                     reply = {"jsonrpc": "2.0", "id": perm_id, "result": {"outcome": "allow_once"}}
-                    await _write_message(self._stdin_writer, reply)
+                    await _write_message(self._stdin_writer, reply, on_message=self._message_hook)
                 continue
             logger.debug("ACP message: %s", msg.get("method") or msg)
         self._next_id += 1

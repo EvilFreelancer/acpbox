@@ -14,3 +14,5 @@ gateway:
   port: 8080
   workers: 1
   threads: 1
+  # Optional JSONL file path for raw HTTP requests/responses and raw ACP JSON-RPC traffic (including tool calls).
+  # request_log_file: "./logs/acpbox-traffic.jsonl"

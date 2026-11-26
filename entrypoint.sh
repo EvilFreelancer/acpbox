@@ -17,6 +17,7 @@ has_agent() {
     cursor) command -v agent >/dev/null 2>&1 ;;
     claude) command -v claude >/dev/null 2>&1 && command -v claude-agent-acp >/dev/null 2>&1 ;;
     codex) command -v codex >/dev/null 2>&1 && command -v codex-acp >/dev/null 2>&1 ;;
+    agy) command -v agy >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }
@@ -42,6 +43,10 @@ install_agent() {
       command -v codex >/dev/null
       command -v codex-acp >/dev/null
       ;;
+    agy)
+      curl -fsSL https://antigravity.google/cli/install.sh | bash
+      command -v agy >/dev/null
+      ;;
     *)
       echo "Unknown agent id $id" >&2
       return 2
@@ -59,7 +64,7 @@ ensure_agents_installed() {
   agents="$(normalize_agents "$agents_csv")"
 
   local id
-  for id in opencode cursor claude codex; do
+  for id in opencode cursor claude codex agy; do
     case "$agents" in
       *,"$id",*)
         if has_agent "$id"; then

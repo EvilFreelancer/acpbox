@@ -22,6 +22,7 @@ services:
       - ACPBOX_GATEWAY_PORT=${ACPBOX_GATEWAY_PORT:-8080}
       - ACPBOX_GATEWAY_WORKERS=${ACPBOX_GATEWAY_WORKERS:-1}
       - ACPBOX_GATEWAY_THREADS=${ACPBOX_GATEWAY_THREADS:-1}
+      - ACPBOX_GATEWAY_REQUEST_LOG_FILE=${ACPBOX_GATEWAY_REQUEST_LOG_FILE:-}
       # Comma-separated list of agents to install
       - AGENTS=${AGENTS:-opencode}
       # Agent API keys

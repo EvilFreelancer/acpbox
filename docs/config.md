@@ -14,6 +14,7 @@ gateway:
   port: 8080
   workers: 1
   threads: 1
+  # request_log_file: "./logs/acpbox-traffic.jsonl"
 ```
 
 ## Fields
@@ -38,6 +39,7 @@ gateway:
 | `port` | integer | 8080 | Port for the gateway. |
 | `workers` | integer | 1 | Uvicorn worker **processes** (minimum 1). One ACP agent process per worker. |
 | `threads` | integer | 1 | Passed to **`uvicorn.run`** only if supported. Typical uvicorn ASGI builds have **no** `threads=` parameter (asyncio event loop per process). |
+| `request_log_file` | string or null | `null` | Optional JSONL file path to log raw HTTP requests/responses (including SSE chunks) and raw ACP JSON-RPC messages (including tool calls, tool updates, and permission requests), correlated by `request_id`. Disabled when unset. |
 
 ## Environment variables
 
@@ -51,6 +53,7 @@ gateway:
 | `ACPBOX_GATEWAY_PORT` | gateway | Port. |
 | `ACPBOX_GATEWAY_WORKERS` | gateway | Uvicorn worker process count. |
 | `ACPBOX_GATEWAY_THREADS` | gateway | Used only if **`uvicorn.run`** in your environment accepts **`threads`**. |
+| `ACPBOX_GATEWAY_REQUEST_LOG_FILE` | gateway | Optional JSONL file path for raw HTTP and raw ACP JSON-RPC traffic logging. Empty value is ignored. |
 
 ## Examples
 

@@ -9,3 +9,4 @@ config.yaml
 build/
 dist/
 .coverage
+logs/

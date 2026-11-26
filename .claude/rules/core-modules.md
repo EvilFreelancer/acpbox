@@ -32,7 +32,7 @@ Covers the ACP transport, OpenAI <-> ACP translation, agent config adapters, con
 ## `mapping.py` - OpenAI <-> ACP translation
 
 - Pure functions only: no I/O, no runner, no FastAPI.
-- Prompt building flattens all messages (chat) or input items (responses) into **one** ACP text block of `"role: content"` parts joined by blank lines, built with `acp.text_block`. Only text parts are used (`text` for chat, `input_text` for responses).
+- Prompt building flattens all messages (chat) or input items (responses) into **one** ACP text block of `"role: content"` parts joined by blank lines, built with `acp.schema.TextContentBlock` (compatible with `agent-client-protocol>=1.0.0`). Only text parts are used (`text` for chat, `input_text` for responses).
 - A `metadata.model` value is prepended as a `model: <value>` line so OpenCode can pick the underlying LLM.
 - `summarize_acp_session_for_non_stream` merges consecutive `agent_thought_chunk` text into `reasoning` steps, folds `tool_call` / `tool_call_update` into one `command` step per `toolCallId`, ignores noise kinds (`usage_update`, `plan`, mode and command updates), and returns `None` when no steps remain.
 - Tool titles go through `sanitize_acp_tool_title`, which strips gpt-oss Harmony `<|channel|>...` suffixes.
@@ -45,7 +45,8 @@ Covers the ACP transport, OpenAI <-> ACP translation, agent config adapters, con
   - OpenCode - `{workspace}/opencode.json`, `"permission"` flat map, values `allow`, `deny`, `ask`;
   - Claude - `{workspace}/.claude/settings.json`, `"permissions": {"allow": [...], "deny": [...]}` with sorted lists, pattern keys such as `Bash(git *)` kept verbatim;
   - Codex - `{workspace}/codex.json`, `"permission"` flat map plus `approval_mode` set by the `suggest`, `auto-edit`, `full-auto` presets;
-  - Cursor - `{workspace}/.cursor/settings.json`, `"permission"` flat map.
+  - Cursor - `{workspace}/.cursor/settings.json`, `"permission"` flat map;
+  - Antigravity CLI (`AgyAdapter`) - `{workspace}/.gemini/antigravity-cli/settings.json`, `"permissions": {"allow": [...], "ask": [...], "deny": [...]}` with sorted lists, `deny > ask > allow` precedence, pattern keys such as `command(git *)` kept verbatim.
 - Writes preserve every non-permission key of the native file (model, provider, mcp, and so on).
 - `set_permissions` replaces, `update_permissions` merges; both return the complete resulting state.
 - The agent type comes from the basename of `acp.command[0]` looked up in `AGENT_COMMAND_MAP`. Unknown binaries get no adapter and the API answers 501.
@@ -63,7 +64,7 @@ Covers the ACP transport, OpenAI <-> ACP translation, agent config adapters, con
 
 ## Deployment Surface
 
-- `Dockerfile` installs the package with `pip install .` and runs as `user` (UID/GID 1000). `entrypoint.sh` installs the agents listed in `AGENTS` (`opencode`, `cursor`, `claude`, `codex`) at container start, then execs `acpbox`.
+- `Dockerfile` installs the package with `pip install .` and runs as `user` (UID/GID 1000). `entrypoint.sh` installs the agents listed in `AGENTS` (`opencode`, `cursor`, `claude`, `codex`, `agy`) at container start, then execs `acpbox`.
 - Adding or renaming an agent means matching changes in `entrypoint.sh`, `acpbox/agents/__init__.py`, `.env.example`, README tables, and `docs/deployment.md`.
 - CI: `tests-on-pr.yaml` runs the suite on every PR. Merging a PR into `main` auto-tags the next patch version (`tag-on-merge.yaml`) and publishes to PyPI and Docker Hub. The version comes from git tags via `setuptools-scm`; never hardcode it in `pyproject.toml`.
 

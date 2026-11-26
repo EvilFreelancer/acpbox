@@ -19,8 +19,17 @@ The list of "models" is the list of **agent operating modes** (ACP `session/new`
 
 **Request mapping (messages -> ACP prompt):**
 
-- Messages are converted to one or more ACP `ContentBlock` values from the python SDK. The gateway uses helpers from `agent-client-protocol` (for example `acp.text_block`) so the resulting JSON matches the official ACP schema.
-- System/user/assistant messages are concatenated into a single text block of the form `\"role: content\"` separated by blank lines.
+- Messages are converted to one or more ACP `ContentBlock` values from the Python SDK. The gateway constructs `acp.schema.TextContentBlock` (compatible with `agent-client-protocol>=1.0.0`) so the resulting JSON matches the official ACP schema.
+- System/user/assistant/developer messages are concatenated into a single text block of the form `"role: content"` separated by blank lines.
+- Multi-turn tool history is preserved in the prompt: `assistant` messages with `tool_calls` (even when `content` is `null`) are serialized as `assistant (tool_call id=<id>): <name>(<arguments>)`, and `role: "tool"` messages are serialized as `tool (tool_call_id=<id>[, name=<name>]): <content>`.
+
+**Client-side tool calling (`tools` / `tool_choice`):**
+
+- When `tools` is non-empty and `tool_choice` is not `"none"`, the gateway prepends an OpenAI tool-bridge instruction block containing the declared tool schemas inside `<available_tools>...</available_tools>` and the active `tool_choice` policy (`"auto"`, `"required"`, or a forced `{"type": "function", "function": {"name": "..."}}`). If `metadata.model` is set, the `model: <value>` line stays first.
+- The ACP agent emits external tool calls as `<acpbox_tool_call>{"name": "<tool_name>", "arguments": {...}}</acpbox_tool_call>` blocks. Only allowed tool names are accepted (all declared `tools`, narrowed to the forced function when `tool_choice` specifies one); valid tagged blocks for disallowed tools are stripped from assistant content in both streaming and non-streaming modes. If `tool_choice` forces a function name not declared in `tools`, the gateway returns **400** (`invalid_input`).
+- **Non-stream (`stream: false`):** Matched tool-call blocks are parsed into `choices[0].message.tool_calls` (`id`, `type: "function"`, `function: { name, arguments }`), stripped from `choices[0].message.content` (becoming `null` if no prose remains), and `choices[0].finish_reason` is set to `"tool_calls"`. When no tool calls are emitted, `tool_calls` is omitted from `choices[0].message`.
+- **Streaming (`stream: true`):** An incremental parser streams plain text immediately while buffering only potential `<acpbox_tool_call>` prefixes/blocks so raw tags never leak into `delta.content`. Each parsed call is emitted as a chunk with `choices[0].delta.tool_calls: [{"index": N, "id", "type": "function", "function": {"name", "arguments"}}]` and the terminal chunk sets `finish_reason: "tool_calls"`.
+- When `tools` is omitted/empty or `tool_choice` is `"none"`, no bridge instructions are added, `<acpbox_tool_call>` tags are not parsed, and streaming uses zero buffering.
 
 **Non-stream response:** Aggregated text from `session/update` (agent_message_chunk) becomes the assistant message. One choice, `finish_reason` from ACP `stopReason`. `usage` is zero if ACP does not provide token counts. The JSON body may include **`acp`**: `{ "steps": [ ... ] }` where each step is either `{ "type": "reasoning", "text": "<merged agent_thought_chunk text in order>" }` or `{ "type": "command", "tool_call_id", "title", "kind", "status", "command", "description", "output", "exit_code" }` (one row per tool, fields merged from `tool_call` / `tool_call_update`). Streaming noise such as `usage_update`, mode updates, and `plan` is omitted. Omitted or null when there are no steps.
 
@@ -53,6 +62,7 @@ The gateway detects the agent type from `acp.command` and manages its native con
 | `claude-agent-acp` | claude | `{workspace}/.claude/settings.json` |
 | `codex-acp` | codex | `{workspace}/codex.json` |
 | `agent` | cursor | `{workspace}/.cursor/settings.json` |
+| `agy` | agy | `{workspace}/.gemini/antigravity-cli/settings.json` |
 
 If the binary is not recognised, agent config endpoints return 501.
 
@@ -102,7 +112,7 @@ Replace permissions entirely. Accepts `preset` and/or explicit `permissions`. If
 |--------|--------|
 | `allow_all` | All known permissions set to `allow` |
 | `deny_all` | All known permissions set to `deny` |
-| `ask_all` | All known permissions set to `ask` (OpenCode only) |
+| `ask_all` | All known permissions set to `ask` (OpenCode and Antigravity CLI `agy`) |
 
 Codex also supports agent-specific presets: `suggest`, `auto-edit`, `full-auto` (maps to its `approval_mode`).
 
@@ -186,6 +196,20 @@ Pattern permissions like `Bash(git *)` are preserved as-is in the key.
   }
 }
 ```
+
+**Antigravity CLI** (`.gemini/antigravity-cli/settings.json`): translated to `allow`, `ask`, and `deny` lists with `action(target)` rules.
+
+```json
+{
+  "permissions": {
+    "allow": ["command(git *)", "read_file(*)"],
+    "ask": ["command(*)"],
+    "deny": ["command(rm -rf)"]
+  }
+}
+```
+
+Pattern rules like `command(git *)`, `write_file(src/)`, `read_file(.env)`, and `mcp(linter/*)` are preserved as-is in the key. When a rule appears in multiple lists on disk, native precedence (`deny` > `ask` > `allow`) applies.
 
 Non-permission keys in the config file (model, provider, mcp, etc.) are always preserved when writing.
 
